@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  faq-miner:
+    build: .
+    container_name: faq_miner_ai
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1

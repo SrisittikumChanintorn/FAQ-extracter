@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>User Manual - FAQ Mining System</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b1120;
+      --bg-card: #111827;
+      --bg-glass: rgba(17,24,39,0.7);
+      --border: #1e293b;
+      --border-accent: rgba(99,102,241,0.5);
+      --text-primary: #f8fafc;
+      --text-secondary: #cbd5e1;
+      --text-muted: #64748b;
+      --accent-1: #6366f1;
+      --accent-2: #8b5cf6;
+      --radius-sm: 8px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg);
+      color: var(--text-primary);
+      margin: 0; padding: 0; line-height: 1.6;
+    }
+    .header {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 100;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+    .header h1 { margin: 0; font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+    .btn-back {
+      background: rgba(255,255,255,0.06); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 6px 14px; font-size: 13px; font-weight: 500;
+      cursor: pointer; text-decoration: none; transition: 0.2s;
+    }
+    .btn-back:hover { background: rgba(255,255,255,0.1); border-color: var(--text-muted); }
+    
+    .hero {
+      background: linear-gradient(135deg, var(--bg) 0%, #1e1b4b 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 60px 24px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: ""; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
+      background: radial-gradient(circle at center, rgba(99,102,241,0.1) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .hero-content {
+      max-width: 800px;
+      margin: 0 auto;
+      position: relative;
+      z-index: 10;
+    }
+    .hero-title {
+      font-size: 42px;
+      font-weight: 800;
+      color: #fff;
+      margin: 0 0 16px 0;
+      letter-spacing: -1px;
+    }
+    .hero-subtitle {
+      font-size: 18px;
+      color: var(--text-secondary);
+      margin: 0 0 24px 0;
+      line-height: 1.6;
+    }
+    .hero-badges {
+      display: flex; gap: 12px; justify-content: center;
+    }
+    .badge {
+      background: rgba(99,102,241,0.15); border: 1px solid var(--border-accent);
+      color: #818cf8; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;
+    }
+    .container { max-width: 900px; margin: 40px auto; padding: 0 24px; }
+    h2 { font-size: 22px; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-top: 40px; margin-bottom: 20px; color: var(--accent-1); }
+    h3 { font-size: 16px; font-weight: 600; margin-top: 30px; margin-bottom: 12px; color: #fff; }
+    p, ul, li { color: var(--text-secondary); font-size: 14px; }
+    ul { padding-left: 20px; list-style-type: disc; margin-bottom: 20px; }
+    li { margin-bottom: 6px; }
+    
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 24px; margin-bottom: 24px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    
+    .format-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px;
+    }
+    .format-panel {
+      background: var(--bg-glass); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 16px;
+    }
+    .format-panel h4 { margin: 0 0 12px 0; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    code {
+      display: inline-block; background: rgba(0,0,0,0.3); border: 1px solid var(--border);
+      border-radius: 4px; padding: 2px 6px; font-family: monospace; font-size: 12px; color: #38bdf8;
+    }
+    .table-wrapper { overflow-x: auto; margin-top: 12px; border: 1px solid var(--border); border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255,255,255,0.03); color: var(--text-primary); font-weight: 600; }
+    
+    .step-list { counter-reset: my-counter; list-style: none; padding: 0; }
+    .step-list > li {
+      position: relative; padding-left: 42px; margin-bottom: 24px;
+    }
+    .step-list > li::before {
+      counter-increment: my-counter; content: counter(my-counter);
+      position: absolute; left: 0; top: -2px; width: 28px; height: 28px;
+      background: var(--accent-1); color: white; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1><span style="font-size:22px;">📖</span> User Manual</h1>
+    <a href="/" class="btn-back">← Back to Dashboard</a>
+  </div>
+
+  <div class="hero">
+    <div class="hero-content">
+      <h1 class="hero-title">FAQ Mining System</h1>
+      <p class="hero-subtitle">The intelligent AI engine that transforms raw customer conversations into a clean, deduplicated, and deeply searchable knowledge base.</p>
+      <div class="hero-badges">
+        <span class="badge">Version 1.0</span>
+        <span class="badge">AI-Powered</span>
+        <span class="badge">Semantic Search</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <div class="card">
+      <h2>1. Preparing Your Data</h2>
+      <p>The system accepts data in three formats: <strong>Excel (.xlsx)</strong>, <strong>CSV (.csv)</strong>, and <strong>JSON (.json)</strong>. Before uploading, prepare your file with two columns containing the customer's question and the admin/agent's answer.</p>
+      
+      <h3>Column Mapping</h3>
+      <p>When you upload a file, a <strong>Data Mapping</strong> screen will appear. You will need to select which column in your file represents the Question, and which represents the Answer. The system will then automatically rename them for processing.</p>
+
+      <div class="format-grid">
+        <div class="format-panel">
+          <h4 style="color:#10b981;">📊 Excel (.xlsx) or CSV (.csv)</h4>
+          <p style="font-size:12px;">Ensure the first row contains column headers.</p>
+          <div class="table-wrapper">
+            <table>
+              <tr><th>Your Question Column</th><th>Your Answer Column</th></tr>
+              <tr><td>How do I reset my password?</td><td>Go to settings and click "Reset".</td></tr>
+              <tr><td>ลืมรหัสผ่านทำยังไงครับ</td><td>ไปที่หน้าตั้งค่าแล้วกดรีเซ็ตเลยค่ะ</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="format-panel">
+          <h4 style="color:#f59e0b;">🗂️ JSON (.json)</h4>
+          <p style="font-size:12px;">Must be an array of objects.</p>
+          <pre style="margin:0;font-size:11px;color:var(--text-secondary);background:rgba(0,0,0,.3);padding:10px;border-radius:6px;border:1px solid var(--border);">[
+  {
+    "query": "Where is my order?",
+    "response": "Check the tracking link."
+  },
+  {
+    "query": "ของถึงไหนแล้ว",
+    "response": "เช็คสถานะพัสดุได้ที่ระบบค่ะ"
+  }
+]</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. System Workflow</h2>
+      <ul class="step-list">
+        <li>
+          <strong>Upload Data</strong> <br>
+          Go to the <em>Upload Data</em> tab. Drag and drop your prepared file. Once selected, you'll be prompted to map your columns. After saving the mapping, click "Go to Process & Analyze".
+        </li>
+        <li>
+          <strong>Data Manipulation</strong> <br>
+          Before running the analysis, you can go to the <em>Data Manipulation</em> tab. Here, you can view up to 500 rows of your raw uploaded data in a spreadsheet-like view and make direct text edits to fix typos or remove bad data. Click "Save Changes" when done.
+        </li>
+        <li>
+          <strong>Process & Analyze</strong> <br>
+          Configure the AI settings (like duplicate strictness and minimum questions per group) and click <em>Start Analysis</em>. The AI will clean the data, extract intent, cluster similar questions, and generate perfect FAQ pairs. Wait for the live log to reach 100%.
+        </li>
+        <li>
+          <strong>Explore the FAQ Library</strong> <br>
+          Once finished, the <em>FAQ Library</em> tab shows all generated FAQs. You can filter them by "Topic Groups". Click any question to expand and read the AI-summarized answer.
+        </li>
+        <li>
+          <strong>Smart Search</strong> <br>
+          Instead of exact keyword matching, the <em>Smart Search</em> uses AI to understand the meaning of your search. Even if a customer asks "I can't log in", it will find the FAQ for "How to reset password".
+        </li>
+        <li>
+          <strong>Data Management</strong> <br>
+          If some FAQs are wrong or irrelevant, go to <em>Data Management</em>. Select the bad FAQs using the checkboxes and either delete them, or click <em>Edit Group</em> to reassign them to a different topic cluster. Hovering over a cluster in the edit menu will show a quick preview of other questions in that group. The system will automatically update the charts, clusters, and search index without needing to re-run the pipeline.
+        </li>
+        <li>
+          <strong>3D Visualization</strong> <br>
+          The <em>3D Visualization</em> tab plots your FAQs in a 3D semantic space. Points that are close together mean the same thing. Click a Topic Group on the right to see its questions highlighted in red.
+        </li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>3. Settings Explained</h2>
+      <ul>
+        <li><strong>Duplicate Removal Strictness (0.70 - 0.99):</strong> <br> Determines how similar two questions must be to be considered a duplicate. Very high numbers (0.95+) mean only exact matches are grouped. Lower numbers (0.80) group loosely related questions. Default is 0.92.</li>
+        <li><strong>Minimum Questions per Topic Group (2 - 15):</strong> <br> How many times a question needs to be asked before it becomes a "Group". If set to 3, any question asked fewer than 3 times is considered "Noise" and ignored. For small files, use 2. For massive datasets, use 10+.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>4. Technical Architecture & System Workflow (For Data Scientists)</h2>
+      <p>The FAQ Mining System employs a modern, 13-stage NLP and Machine Learning pipeline designed for robust semantic extraction from unstructured conversational data.</p>
+      
+      <div style="background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:6px; padding:16px; margin-top:16px;">
+        <h3 style="margin-top:0; color:#38bdf8;">The 13-Stage Pipeline</h3>
+        <ol class="step-list" style="padding-left:0; margin-top:16px;">
+          <li style="margin-bottom:12px;"><strong>Data Cleaning</strong>: Normalization, lowercasing, and removal of HTML tags and special characters.</li>
+          <li style="margin-bottom:12px;"><strong>Language Detection</strong>: Detects Thai vs. English to route to appropriate processing functions.</li>
+          <li style="margin-bottom:12px;"><strong>Tokenization & Stopword Removal</strong>: Utilizes <code>pythainlp</code> for Thai wrapping and standard NLTK for English.</li>
+          <li style="margin-bottom:12px;"><strong>Lemmatization</strong>: Reduces words to their base forms to improve semantic matching.</li>
+          <li style="margin-bottom:12px;"><strong>Semantic Embedding Extraction</strong>: Uses <code>paraphrase-multilingual-MiniLM-L12-v2</code> (SentenceTransformers) to map text to 384-dimensional dense vectors.</li>
+          <li style="margin-bottom:12px;"><strong>Deduplication (Exact & Fuzzy)</strong>: Cosine similarity thresholding (configurable via UI) to merge identical intents.</li>
+          <li style="margin-bottom:12px;"><strong>Dimensionality Reduction (UMAP)</strong>: Reduces 384D to 5D locally preserving geometry for efficient clustering.</li>
+          <li style="margin-bottom:12px;"><strong>Density-Based Clustering (HDBSCAN)</strong>: Dynamically groups dense regions of questions into Topic Clusters, identifying outliers as "Noise (-1)".</li>
+          <li style="margin-bottom:12px;"><strong>Centroid Calculation</strong>: Computes the geometric mean of embeddings within each cluster.</li>
+          <li style="margin-bottom:12px;"><strong>Representative Selection</strong>: Selects the real question closest to the centroid as the single "Canonical Question".</li>
+          <li style="margin-bottom:12px;"><strong>Answer Synthesis / Selection</strong>: Extracts the most relevant admin reply corresponding to the canonical question.</li>
+          <li style="margin-bottom:12px;"><strong>Vector Search Indexing (FAISS)</strong>: Builds an L2 Index using <code>faiss-cpu</code> for blazing-fast semantic search across the generated FAQ library.</li>
+          <li style="margin-bottom:12px;"><strong>3D Projection (PCA)</strong>: Performs Singular Value Decomposition (SVD) to reduce embeddings to 3D space for interactive Three.js frontend rendering.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>5. Deployment (Docker)</h2>
+      <p>The system is fully containerized and production-ready. To deploy using Docker, ensure Docker Desktop is installed on your server.</p>
+      
+      <h3>Build & Run</h3>
+      <div style="background:rgba(0,0,0,0.3); padding:16px; border-radius:6px; border:1px solid var(--border); margin-top:12px;">
+        <code style="display:block; margin-bottom:10px;"># Step 1: Build the Docker image</code>
+        <code style="display:block; margin-bottom:20px; color:#10b981;">docker build -t faq-miner-ai .</code>
+        
+        <code style="display:block; margin-bottom:10px;"># Step 2: Run the container with volume mapping for persistence</code>
+        <code style="display:block; color:#10b981;">docker run -d -p 8000:8000 -v faq_data:/app/data --name faq_miner faq-miner-ai</code>
+      </div>
+      
+      <p style="margin-top:16px;">The service will map to port <code>8000</code>. Access the web interface at <strong>http://localhost:8000</strong>.</p>
+      
+      <h3>Process Management</h3>
+      <p>The system is built with robust port management. If you start the pipeline manually using <code>python backend/main.py --serve</code>, it will automatically detect and kill any existing Python processes occupying port 8000, ensuring a clean single instance runs every time.</p>
+    </div>
+
+  </div>
+
+</body>
+</html>

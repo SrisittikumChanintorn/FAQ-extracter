@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Privacy Policy - FAQ Mining System</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background: #070c18; color: #eef2ff; line-height: 1.6; padding: 40px 20px; margin: 0; }
+    .container { max-width: 800px; margin: 0 auto; background: #111827; padding: 40px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.07); }
+    h1 { color: #6366f1; font-size: 28px; margin-top: 0; }
+    h2 { color: #10b981; font-size: 20px; margin-top: 30px; }
+    p { color: #a0aec0; font-size: 15px; }
+    a { color: #6366f1; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p>Last updated: March 2026</p>
+
+    <h2>1. Information Collection</h2>
+    <p>The FAQ Mining System processes data locally on the server where it is hosted. The tool allows you to upload conversation logs (CSV, Excel, JSON) to generate FAQs. The data you process remains on your local deployment environment. We do not track or collect external telemetry unless explicitly configured by the system administrator.</p>
+
+    <h2>2. Use of Data</h2>
+    <p>Uploaded data is used strictly for the purpose of executing the AI pipeline: cleaning text, removing duplicates, clustering topics, and building an AI semantic search index. Generated artifacts are saved directly to your local `/data` directory.</p>
+
+    <h2>3. Data Security</h2>
+    <p>We are committed to ensuring that your information is secure. The system operates entirely within the boundaries of where you have deployed the FastAPI backend. However, because no method of transmission over the Internet or method of electronic storage is 100% secure, we cannot guarantee its absolute security.</p>
+
+    <h2>4. Third-Party Services</h2>
+    <p>The system utilizes pre-trained HuggingFace sentence transformers to generate embeddings. The embedding generation runs locally, but initial model weights may need to be downloaded from the HuggingFace Hub during the first run. Please refer to HuggingFace's privacy policy for more details.</p>
+
+    <h2>5. Changes to This Privacy Policy</h2>
+    <p>We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page.</p>
+
+    <div style="margin-top:40px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px;">
+      <a href="/">← Back to Application</a>
+    </div>
+  </div>
+</body>
+</html>
