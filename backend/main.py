@@ -1,21 +1,15 @@
 """
-main.py — Pipeline Orchestrator v3 (LLM Batch FAQ Extraction + UMAP + Group Naming)
+main.py — Optimized FAQ extraction pipeline (LLM-centric batch + merge)
 
-Pipeline stages:
-  1.    Data Ingestion
-  2.    Text Cleaning
-  3.    Question Filtering
-  3.5   LLM Batch FAQ Extraction  ← NEW (Ollama/Typhoon → canonical Q&A pairs)
-  4.    Embed extracted FAQ questions (BAAI/bge-m3, 1024-dim)
-  4.5   UMAP Reduction (1024→8)
-  5.    Semantic Deduplication (on extracted FAQ embeddings)
-  6.    HDBSCAN Clustering
-  7.    Cluster Quality Filtering
-  8.    LLM Group Naming (Ollama/Typhoon → short Thai category name)
-  9-10. Group Assembly (Q&A pairs → grouped output with full FAQ lists)
-  11.   FAISS Search Index
-  12.   API Server (--serve flag)
-  13.   Analytics
+Pipeline:
+  1. Load data
+  2. Clean text
+  3. Filter questions
+  4. Split into n_splits; per split: LLM extracts FAQs + assigns group_name (micro-batches)
+  5. Merge batch results in pairs: merge groups by name, dedupe FAQs by similarity, sum mention_count
+  6. Build search index (FAISS from group questions)
+  7. Save output + analytics
+  8. (Optional) Serve API
 
 Usage:
   python backend/main.py --input data/conversations.json
@@ -34,165 +28,169 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.config import (
     ANALYTICS_OUTPUT_FILE,
     DEFAULT_INPUT_FILE,
-    EMBEDDINGS_CACHE_FILE,
-    EMBEDDINGS_IDS_CACHE_FILE,
-    FAQ_EXTRACTION_BATCH_SIZE,
+    FAQ_N_SPLITS,
     FAQ_OUTPUT_FILE,
     LOG_DATE_FORMAT,
     LOG_FORMAT,
     LOG_LEVEL,
     API_HOST,
     API_PORT,
-    UMAP_CACHE_FILE,
-    UMAP_PARAMS_CACHE_FILE,
+    REPRESENTATIVE_Q_COUNT,
 )
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 logger = logging.getLogger(__name__)
 
 
-def run_pipeline(input_file: str) -> dict:
-    """
-    Execute all pipeline stages and return API state dict.
+def _groups_to_canonical_schema(groups: list[dict]) -> list[dict]:
+    """Convert merged groups (group_name, faqs) to API/frontend schema with group_id, total_faqs, representative_questions, etc."""
+    canonical = []
+    for i, g in enumerate(groups):
+        faqs = g.get("faqs", [])
+        rep_qs = [f.get("question", "") for f in faqs[:REPRESENTATIVE_Q_COUNT] if f.get("question")]
+        if not rep_qs:
+            rep_qs = [g.get("group_name") or "Other"]
+        support_count = sum(f.get("mention_count", 1) for f in faqs)
+        canonical.append({
+            "group_id": i,
+            "cluster_id": i,
+            "group_name": (g.get("group_name") or "").strip() or "Other",
+            "total_faqs": len(faqs),
+            "total_questions": len(faqs),
+            "support_count": support_count,
+            "faqs": faqs,
+            "representative_questions": rep_qs,
+            "canonical_question": rep_qs[0] if rep_qs else "",
+            "canonical_answer": faqs[0].get("answer", "") if faqs else "",
+            "faq_question": rep_qs[0] if rep_qs else "",
+            "faq_answer": faqs[0].get("answer", "") if faqs else "",
+            "suggested_admin_reply": faqs[0].get("answer", "") if faqs else "",
+        })
+    canonical.sort(key=lambda x: x["support_count"], reverse=True)
+    for i, g in enumerate(canonical):
+        g["group_id"] = i
+        g["cluster_id"] = i
+    return canonical
 
-    Returns:
-        {
-            "faq_index": FAQSearchIndex,
-            "groups": list[dict],
-            "analytics": dict,
-            "valid_questions": list[str],
-            "valid_embeddings": np.ndarray,
-        }
+
+def run_pipeline(input_file: str, progress_callback=None) -> dict:
+    """
+    Run optimized pipeline: load → clean → filter → batch extract (LLM) → merge → index → save.
+    progress_callback(stage, stage_name, message) is optional for UI progress.
+    Returns state dict for API.
     """
     import numpy as np
 
+    def _prog(stage: int, name: str, msg: str):
+        if progress_callback:
+            progress_callback(stage, name, msg)
+        logger.info(msg)
+
     start_time = time.time()
     logger.info("=" * 70)
-    logger.info("FAQ Mining Pipeline v3 — LLM Extraction + UMAP + Group Naming")
+    logger.info("FAQ Pipeline (LLM batch + merge)")
     logger.info("=" * 70)
 
-    # ── Stage 1: Data Ingestion ───────────────────────────────────────────────
+    # ── 1. Load ─────────────────────────────────────────────────────────────
+    _prog(1, "Loading dataset", "Stage 1: Loading dataset…")
     from backend.data_loader import load_dataset
     raw_df = load_dataset(input_file)
+    _prog(1, "Loading dataset", f"  → Loaded {len(raw_df)} records.")
 
-    # ── Stage 2: Text Cleaning ────────────────────────────────────────────────
+    # ── 2. Clean ────────────────────────────────────────────────────────────
+    _prog(2, "Cleaning text", "Stage 2: Cleaning text…")
     from backend.text_cleaner import clean_questions
     cleaned_df = clean_questions(raw_df)
+    _prog(2, "Cleaning text", f"  → {len(cleaned_df)} rows after cleaning.")
 
-    # ── Stage 3: Question Filtering ───────────────────────────────────────────
+    # ── 3. Filter ───────────────────────────────────────────────────────────
+    _prog(3, "Filtering questions", "Stage 3: Filtering questions…")
     from backend.question_filter import filter_questions
     valid_df = filter_questions(cleaned_df)
+    _prog(3, "Filtering questions", f"  → {len(valid_df)} valid questions.")
 
     if len(valid_df) == 0:
-        raise RuntimeError("No valid questions after filtering. Please check your dataset.")
+        raise RuntimeError("No valid questions after filtering. Check your dataset.")
 
-    # ── Stage 3.5: LLM Batch FAQ Extraction ──────────────────────────────────
-    # Convert filtered Q&A pairs → canonical FAQ pairs via Ollama (Typhoon)
-    from backend.llm_extractor import extract_all_faqs
-    faq_df = extract_all_faqs(
+    # ── 4. Batch extract (LLM: FAQ + group per split) ────────────────────────
+    from backend.batch_extractor import run_all_batches
+    from backend.config import FAQ_EXTRACTION_BATCH_SIZE
+
+    _prog(4, "LLM batch extraction", "Stage 4: LLM extracting FAQs + groups per batch…")
+    batch_results = run_all_batches(
         valid_df,
-        batch_size=FAQ_EXTRACTION_BATCH_SIZE,
+        n_splits=FAQ_N_SPLITS,
+        micro_batch_size=FAQ_EXTRACTION_BATCH_SIZE,
     )
 
-    if len(faq_df) == 0:
+    if not batch_results or all(not r for r in batch_results):
         raise RuntimeError(
-            "No FAQ pairs extracted. "
-            "Check that Ollama is running and the Typhoon model is loaded. "
-            "Run: ollama serve && ollama pull <model-name>"
+            "No FAQs extracted. Ensure Ollama is running and the model is loaded. "
+            "Run: ollama pull <model-name> (and make sure the Ollama service is running)."
         )
+    _prog(4, "LLM batch extraction", f"  → {len(batch_results)} batches ready to merge.")
 
-    logger.info(f"Stage 3.5 complete: {len(faq_df)} canonical FAQ pairs extracted.")
+    # ── 5. Merge batches (pairwise until one) ─────────────────────────────────
+    _prog(5, "Merging batches", "Stage 5: Merging batch results (dedupe, mention count)…")
+    from backend.batch_merger import merge_all_batch_results
+    merged_groups = merge_all_batch_results(batch_results)
 
-    # ── Stage 4: Embed Extracted FAQ Questions (bge-m3) ───────────────────────
-    # Note: faq_df already has 'clean_question' column set by extract_all_faqs()
-    from backend.embedding_service import generate_embeddings, l2_normalize
-    full_embeddings, faq_df = generate_embeddings(
-        faq_df,
-        use_cache=True,
-        cache_file=EMBEDDINGS_CACHE_FILE,
-        ids_cache_file=EMBEDDINGS_IDS_CACHE_FILE,
-    )
+    if not merged_groups:
+        raise RuntimeError("Merge produced no groups. Check LLM output format.")
 
-    # ── Stage 4.5: UMAP Dimensionality Reduction ──────────────────────────────
-    from backend.umap_reducer import reduce_dimensions
-    reduced_embeddings = reduce_dimensions(
-        full_embeddings,
-        use_cache=True,
-        cache_file=UMAP_CACHE_FILE,
-        params_cache_file=UMAP_PARAMS_CACHE_FILE,
-    )
+    groups = _groups_to_canonical_schema(merged_groups)
+    total_faq_items = sum(g["total_faqs"] for g in groups)
+    _prog(5, "Merging batches", f"  → {len(groups)} groups, {total_faq_items} FAQ items.")
 
-    # ── Stage 5: Semantic Dedup of Extracted FAQs ─────────────────────────────
-    from backend.deduplication import deduplicate
-    unique_faq_df, full_faq_with_flags = deduplicate(faq_df, full_embeddings)
-
-    unique_mask = ~full_faq_with_flags["is_duplicate"].values
-    unique_full_embs = full_embeddings[unique_mask]
-    unique_reduced_embs = reduced_embeddings[unique_mask]
-
-    if len(unique_faq_df) == 0:
-        raise RuntimeError("All extracted FAQs were deduplicated. Lower FAQ_DEDUP_SIMILARITY_THRESHOLD.")
-
-    # ── Stage 6: HDBSCAN Clustering ───────────────────────────────────────────
-    from backend.clustering import run_clustering, filter_clusters
-    clustered_faq_df = run_clustering(unique_faq_df, unique_reduced_embs)
-
-    # ── Stage 7: Cluster Quality Filtering ────────────────────────────────────
-    clustered_faq_df = filter_clusters(clustered_faq_df, unique_reduced_embs)
-
-    n_groups = len([c for c in clustered_faq_df["cluster_id"].unique() if c != -1])
-    logger.info(f"Clustering: {n_groups} FAQ groups identified.")
-
-    # ── Stages 8–10: Group Generation (LLM naming + full FAQ lists) ───────────
-    from backend.topic_namer import build_namer_fn
-    from backend.faq_generator import generate_groups
-    name_fn = build_namer_fn()
-    groups = generate_groups(clustered_faq_df, unique_full_embs, name_fn)
-
-    if not groups:
-        logger.warning(
-            "No groups generated. Try lowering CLUSTER_MIN_CLUSTER_SIZE or "
-            "increasing FAQ_EXTRACTION_BATCH_SIZE."
-        )
-
-    # ── Stage 11: Build FAISS Search Index ────────────────────────────────────
+    # ── 6. Search index ──────────────────────────────────────────────────────
+    _prog(6, "Building search index", "Stage 6: Building FAISS search index…")
     from backend.search_index import FAQSearchIndex
     faq_index = FAQSearchIndex()
-    if groups:
-        faq_index.build(groups)
-        faq_index.save()
+    faq_index.build(groups)
+    faq_index.save()
 
-    # ── Save output ───────────────────────────────────────────────────────────
+    # ── 7. Save output ───────────────────────────────────────────────────────
     os.makedirs(os.path.dirname(FAQ_OUTPUT_FILE), exist_ok=True)
     with open(FAQ_OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump({"total_groups": len(groups), "groups": groups}, f, ensure_ascii=False, indent=2)
-    logger.info(f"FAQ groups saved to: {FAQ_OUTPUT_FILE}")
+    logger.info(f"Saved: {FAQ_OUTPUT_FILE}")
 
-    # ── Stage 13: Analytics ───────────────────────────────────────────────────
-    from backend.analytics import generate_analytics
-    analytics = generate_analytics(raw_df, full_faq_with_flags, unique_faq_df, clustered_faq_df, groups)
+    # ── 8. Analytics (simplified) ────────────────────────────────────────────
+    _prog(7, "Analytics", "Stage 7: Generating analytics…")
+    from backend.analytics import generate_analytics_simple
+    analytics = generate_analytics_simple(raw_df, groups)
 
     os.makedirs(os.path.dirname(ANALYTICS_OUTPUT_FILE), exist_ok=True)
     with open(ANALYTICS_OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(analytics, f, ensure_ascii=False, indent=2)
-    logger.info(f"Analytics saved to: {ANALYTICS_OUTPUT_FILE}")
 
     elapsed = time.time() - start_time
     logger.info("=" * 70)
-    logger.info(
-        f"Pipeline complete in {elapsed:.1f}s | {len(groups)} groups | "
-        f"{sum(g.get('total_faqs', 0) for g in groups)} total FAQ pairs"
-    )
+    logger.info(f"Pipeline complete in {elapsed:.1f}s | {len(groups)} groups | {total_faq_items} FAQ items")
     logger.info("=" * 70)
 
-    # Expose canonical FAQ questions for /similar_questions endpoint
-    valid_questions = unique_faq_df["clean_question"].tolist()
-    valid_embeddings = l2_normalize(unique_full_embs)
+    # For /similar_questions: collect all questions from groups and embed (optional, can be empty)
+    valid_questions = []
+    try:
+        from backend.embedding_service import encode_texts, l2_normalize
+        for g in groups:
+            for f in g.get("faqs", []):
+                q = f.get("question", "")
+                if q:
+                    valid_questions.append(q)
+        if valid_questions:
+            raw_embs = encode_texts(valid_questions[:500], is_query=False, show_progress=False)
+            valid_embeddings = l2_normalize(raw_embs)
+        else:
+            valid_embeddings = np.empty((0, 0))
+    except Exception:
+        valid_questions = []
+        valid_embeddings = np.empty((0, 0))
 
     return {
         "faq_index": faq_index,
         "groups": groups,
-        "faqs": groups,          # backwards compat
+        "faqs": groups,
         "analytics": analytics,
         "valid_questions": valid_questions,
         "valid_embeddings": valid_embeddings,
@@ -200,9 +198,7 @@ def run_pipeline(input_file: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="FAQ Mining Pipeline v3 — LLM-extracted Q&A pairs, UMAP, HDBSCAN groups."
-    )
+    parser = argparse.ArgumentParser(description="FAQ extraction pipeline (LLM batch + merge)")
     parser.add_argument("--input", type=str, default=DEFAULT_INPUT_FILE)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--host", type=str, default=API_HOST)
@@ -246,7 +242,21 @@ def main():
             valid_embeddings=state["valid_embeddings"],
         )
         import uvicorn
-        logger.info(f"Starting API server at http://{args.host}:{args.port}")
+
+        base = f"http://{args.host}:{args.port}"
+        print("\n" + "=" * 70)
+        print("  FAQ MINING SYSTEM — Server Starting")
+        print("=" * 70)
+        print(f"  Status:  starting (after ready → 200 OK)")
+        print(f"  Port:    {args.port}")
+        print(f"  URL:     {base}")
+        print("  " + "-" * 66)
+        print(f"  ➜  Copy & open:  {base}")
+        print(f"  ➜  API Docs:     {base}/docs")
+        print(f"  ➜  Health:       {base}/health  (expect 200 when ready)")
+        print("=" * 70 + "\n")
+
+        logger.info(f"Starting server at {base} (port {args.port})")
         uvicorn.run(app, host=args.host, port=args.port, reload=False)
 
 

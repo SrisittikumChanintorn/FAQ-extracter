@@ -141,3 +141,35 @@ def load_dataset(file_path: str) -> pd.DataFrame:
 
     logger.info(f"Stage 1 complete: {len(df)} valid conversation pairs loaded.")
     return df
+
+
+def load_support_data(file_path: str, validate: bool = True) -> pd.DataFrame:
+    """
+    Load uploaded file for preview/mapping (xlsx, xls, csv, json) without requiring
+    normalized schema. If validate=True, normalizes and rejects empty rows (same as load_dataset).
+    """
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".json":
+        df = load_json(file_path)
+    elif ext == ".csv":
+        df = load_csv(file_path)
+    elif ext in (".xlsx", ".xls"):
+        try:
+            df = pd.read_excel(file_path)
+        except Exception as e:
+            raise ValueError(f"Cannot read Excel file: {e}")
+    else:
+        raise ValueError(f"Unsupported format: '{ext}'. Use .json, .csv, or .xlsx")
+
+    if df.empty:
+        return df
+
+    if validate:
+        df = normalize_schema(df)
+        df = reject_empty(df)
+    else:
+        df = df.astype(str).fillna("")
+    return df.reset_index(drop=True)

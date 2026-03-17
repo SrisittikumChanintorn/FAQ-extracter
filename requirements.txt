@@ -1,37 +1,24 @@
 # FAQ Mining System — Python Dependencies
 # Install: pip install -r requirements.txt
 
-# ── NLP & Embeddings ──────────────────────────────────────────────────────────
+# ── Embeddings (BAAI/bge-m3 via sentence-transformers) ───────────────────────
 sentence-transformers>=2.6.1
-transformers>=4.38.0
-torch>=2.1.0              # CPU build; replace with torch+cu118 for GPU
+torch>=2.1.0  # CPU build; install a CUDA build separately if needed
 
-# ── Dimensionality Reduction ───────────────────────────────────────────────────
-umap-learn>=0.5.6
+# ── Vector Search ────────────────────────────────────────────────────────────
+faiss-cpu>=1.7.4
 
-# ── Vector Search ─────────────────────────────────────────────────────────────
-faiss-cpu>=1.7.4          # Replace with faiss-gpu if CUDA is available
-
-# ── Clustering ────────────────────────────────────────────────────────────────
-hdbscan>=0.8.33
-scikit-learn>=1.4.0
-
-# ── Data Processing ───────────────────────────────────────────────────────────
-pandas>=2.1.0
+# ── Data Processing ──────────────────────────────────────────────────────────
 numpy>=1.26.0
+pandas>=2.1.0
+openpyxl>=3.1.0
 tqdm>=4.66.0
 
-# ── API Server ────────────────────────────────────────────────────────────────
+# ── API Server ───────────────────────────────────────────────────────────────
 fastapi>=0.110.0
 uvicorn[standard]>=0.28.0
 pydantic>=2.6.0
 python-multipart>=0.0.9
 
-# ── HTTP Client ───────────────────────────────────────────────────────────────
-requests>=2.31.0          # Used by topic_namer.py for Ollama API calls
-httpx>=0.27.0             # Used for testing
-
-# ── LLM Clients (optional — install only the one you need) ───────────────────
-# openai>=1.0.0
-# anthropic>=0.25.0
-# google-generativeai>=0.5.0
+# ── HTTP Client (Ollama) ─────────────────────────────────────────────────────
+requests>=2.31.0

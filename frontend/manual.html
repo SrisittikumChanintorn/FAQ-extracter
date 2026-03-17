@@ -1,8 +1,11 @@
 <!DOCTYPE html>
-<html lang="th">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>คู่มือการใช้งาน — FAQ Mining System v3</title>
+  <title>User Manual — FAQ Mining</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
@@ -128,21 +131,22 @@
 <body>
 
 <div class="header">
-  <h1>📖 คู่มือการใช้งาน <span class="badge-v">v3.0</span></h1>
-  <a href="/" class="btn-back">← กลับ Dashboard</a>
+  <h1>User Manual <span class="badge-v">v3</span></h1>
+  <a href="/" class="btn-back">← Back to Dashboard</a>
 </div>
 
 <div class="hero">
   <div class="hero-content">
-    <h1 class="hero-title">FAQ Mining System</h1>
-    <p class="hero-sub">สกัด FAQ จริงๆ จากบทสนทนาลูกค้า ด้วย AI ท้องถิ่น (Ollama)<br>
-      ไม่มีค่า API — ทำงานออฟไลน์ได้ — รองรับภาษาไทยเต็มรูปแบบ</p>
+    <h1 class="hero-title">FAQ Mining</h1>
+    <p class="hero-sub">
+      FAQ Mining is a local, offline-first system for extracting FAQ candidates from support datasets and organizing them into topic groups.
+      It is designed for professional review workflows and is <strong>Thai-first</strong> (optimized for Thai customer support), while still understanding English.
+    </p>
     <div class="badges">
-      <span class="badge">v3.0</span>
-      <span class="badge">Ollama Local LLM</span>
-      <span class="badge">BAAI/bge-m3</span>
-      <span class="badge">UMAP + HDBSCAN</span>
-      <span class="badge">FAISS Search</span>
+      <span class="badge">Ollama (Local LLM)</span>
+      <span class="badge">BAAI/bge-m3 Embeddings</span>
+      <span class="badge">Batch Extraction</span>
+      <span class="badge">FAISS Semantic Search</span>
     </div>
   </div>
 </div>
@@ -151,43 +155,43 @@
 
   <!-- TOC -->
   <div class="toc">
-    <h3>📋 สารบัญ</h3>
+    <h3>Contents</h3>
     <ol>
-      <li><a href="#prereq">ตรวจสอบ Prerequisites</a></li>
-      <li><a href="#install-ollama">ติดตั้ง Ollama</a></li>
-      <li><a href="#choose-model">เลือกและโหลดโมเดล</a></li>
-      <li><a href="#install-python">ติดตั้ง Python Libraries</a></li>
-      <li><a href="#config">ตั้งค่าระบบ</a></li>
-      <li><a href="#run">รัน Pipeline ครั้งแรก</a></li>
-      <li><a href="#use-ui">วิธีใช้งาน UI</a></li>
-      <li><a href="#pipeline">ขั้นตอนการทำงาน (Pipeline)</a></li>
-      <li><a href="#output">รูปแบบผลลัพธ์</a></li>
-      <li><a href="#settings">ตั้งค่า (config.py)</a></li>
-      <li><a href="#troubleshoot">แก้ปัญหาที่พบบ่อย</a></li>
-      <li><a href="#api">API Reference</a></li>
+      <li><a href="#prereq">Prerequisites</a></li>
+      <li><a href="#install-ollama">Install Ollama</a></li>
+      <li><a href="#choose-model">Choose and load model</a></li>
+      <li><a href="#install-python">Install Python dependencies</a></li>
+      <li><a href="#config">Configure model</a></li>
+      <li><a href="#run">Run the pipeline</a></li>
+      <li><a href="#use-ui">Using the dashboard</a></li>
+      <li><a href="#pipeline">Pipeline overview</a></li>
+      <li><a href="#output">Output format</a></li>
+      <li><a href="#settings">Configuration (config.py)</a></li>
+      <li><a href="#troubleshoot">Troubleshooting</a></li>
+      <li><a href="#api">API reference</a></li>
     </ol>
   </div>
 
   <!-- ── 1. Prerequisites ───────────────────── -->
   <div class="card" id="prereq">
-    <h2>1️⃣ ตรวจสอบ Prerequisites</h2>
-    <p>ก่อนเริ่ม ตรวจสอบว่ามีสิ่งต่อไปนี้ครบ:</p>
+    <h2>1. Prerequisites</h2>
+    <p>Before you begin, confirm the following requirements are met:</p>
 
     <div class="step-wrap">
       <div class="step">
         <div class="step-n">1</div>
         <div class="step-body">
-          <h4>ตรวจสอบ Python</h4>
+          <h4>Python</h4>
           <div class="cmd">python --version</div>
-          <p>ต้องได้ Python 3.9 ขึ้นไป — ถ้าไม่มี โหลดที่ <a href="https://www.python.org/downloads/" target="_blank">python.org/downloads</a></p>
+          <p>Python 3.9 or later is required. If not installed, download from <a href="https://www.python.org/downloads/" target="_blank">python.org/downloads</a>.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-n">2</div>
         <div class="step-body">
-          <h4>ตรวจสอบ RAM ที่มี</h4>
+          <h4>RAM</h4>
           <div class="cmd">Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory</div>
-          <p>ดูตัวเลข (bytes) — หารด้วย 1073741824 = GB. เช่น 8,589,934,592 = 8 GB</p>
+          <p>Divide the value (bytes) by 1073741824 to get GB. For the recommended model, 8 GB RAM or higher is strongly recommended.</p>
         </div>
       </div>
     </div>
@@ -195,76 +199,65 @@
 
   <!-- ── 2. Install Ollama ──────────────────── -->
   <div class="card" id="install-ollama">
-    <h2>2️⃣ ติดตั้ง Ollama</h2>
-    <p>Ollama ทำให้รัน LLM บนเครื่องท้องถิ่นได้ง่าย</p>
+    <h2>2. Install Ollama</h2>
+    <p>Ollama enables you to run large language models locally on your machine.</p>
 
     <div class="step-wrap">
       <div class="step">
         <div class="step-n">1</div>
         <div class="step-body">
-          <h4>ติดตั้งผ่าน winget (แนะนำ)</h4>
+          <h4>Install via winget (recommended)</h4>
           <div class="cmd">winget install Ollama.Ollama</div>
-          <p>รอจนเสร็จ → ปิดและเปิด PowerShell ใหม่ทันที</p>
-          <div class="info"><p>💡 <strong>Alternative:</strong> โหลด installer ได้ที่ <a href="https://ollama.com/download/OllamaSetup.exe">ollama.com/download/OllamaSetup.exe</a></p></div>
+          <p>After installation, close and reopen PowerShell to ensure the PATH is refreshed.</p>
+          <div class="info"><p><strong>Alternative:</strong> Download the installer from <a href="https://ollama.com/download/OllamaSetup.exe">ollama.com</a>.</p></div>
         </div>
       </div>
       <div class="step">
         <div class="step-n green">2</div>
         <div class="step-body">
-          <h4>ยืนยันว่าติดตั้งสำเร็จ</h4>
+          <h4>Verify installation</h4>
           <div class="cmd">ollama --version</div>
-          <div class="success"><p>✅ ถ้าเห็น <code>ollama version 0.x.x</code> = สำเร็จ</p></div>
-          <div class="err"><p>❌ ถ้ายังขึ้น "not recognized" = ยังไม่ได้ปิด-เปิด PowerShell ใหม่ ลองอีกครั้ง</p></div>
+          <div class="success"><p>If you see <code>ollama version 0.x.x</code>, installation succeeded.</p></div>
+          <div class="err"><p>If "not recognized" appears, close and reopen PowerShell and try again.</p></div>
         </div>
       </div>
     </div>
 
-    <div class="info"><p>ℹ️ Ollama รันเป็น <strong>background service อัตโนมัติ</strong> หลังติดตั้ง — ไม่ต้องพิมพ์ <code>ollama serve</code> ทุกครั้ง</p></div>
+    <div class="info"><p>Ollama typically runs as a <strong>background service</strong> after installation. In most cases, you do not need to run <code>ollama serve</code> manually.</p></div>
   </div>
 
   <!-- ── 3. Choose Model ────────────────────── -->
   <div class="card" id="choose-model">
-    <h2>3️⃣ เลือกและโหลดโมเดล</h2>
+    <h2>3. Choose and load a model</h2>
 
-    <h3>เลือกโมเดลตาม RAM ที่มี</h3>
+    <h3>Recommended model</h3>
     <div class="table-wrap">
       <table>
-        <tr><th>โมเดล</th><th>ขนาด</th><th>RAM ขั้นต่ำ</th><th>ภาษาไทย</th><th>แนะนำ</th></tr>
+        <tr><th>Model</th><th>Size</th><th>Min. RAM</th><th>Notes</th></tr>
         <tr>
           <td><code>scb10x/llama3.1-typhoon2-8b-instruct</code></td>
           <td>5.0 GB</td>
           <td>8 GB+</td>
-          <td>✅ ดีที่สุด</td>
-          <td><span class="tag tag-best">แนะนำอันดับ 1</span></td>
+          <td><span class="tag tag-best">Recommended</span></td>
         </tr>
       </table>
     </div>
-
-    <div class="warn"><p>⚠️ โหลดได้แค่ 1 โมเดลก็พอ — ไม่ต้องโหลดทุกตัว</p></div>
 
     <div class="step-wrap" style="margin-top:20px;">
       <div class="step">
         <div class="step-n">1</div>
         <div class="step-body">
-          <h4>โหลดโมเดล</h4>
+          <h4>Pull the model</h4>
           <div class="cmd">ollama pull scb10x/llama3.1-typhoon2-8b-instruct</div>
-          <p>รอจนโหลดเสร็จ (5.0 GB — ใช้เวลา 5–20 นาที ขึ้นอยู่กับ internet)</p>
+          <p>Download time depends on your connection and disk speed.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-n">2</div>
         <div class="step-body">
-          <h4>ยืนยันว่าโหลดสำเร็จ</h4>
+          <h4>Verify</h4>
           <div class="cmd">ollama list</div>
-          <p>จะเห็นชื่อโมเดล เช่น <code>scb10x/llama3.1-typhoon2-8b-instruct</code> — <strong>จำชื่อนี้ไว้ใช้ใน Step 5</strong></p>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-n green">3</div>
-        <div class="step-body">
-          <h4>ทดสอบว่าโมเดลตอบภาษาไทยได้</h4>
-          <div class="cmd">ollama run scb10x/llama3.1-typhoon2-8b-instruct "สรุปในหนึ่งประโยค: ลูกค้าถามเรื่องการฝากเงิน"</div>
-          <div class="success"><p>✅ ถ้าเห็นคำตอบเป็นภาษาไทย = พร้อมใช้งาน พิมพ์ /bye เพื่อออก</p></div>
+          <p>Confirm the model name appears. Use this exact name in configuration (Step 5).</p>
         </div>
       </div>
     </div>
@@ -272,49 +265,45 @@
 
   <!-- ── 4. Python Libraries ────────────────── -->
   <div class="card" id="install-python">
-    <h2>4️⃣ ติดตั้ง Python Libraries</h2>
+    <h2>4. Install Python dependencies</h2>
     <div class="step-wrap">
       <div class="step">
         <div class="step-n">1</div>
         <div class="step-body">
-          <h4>เข้าไปที่ project folder</h4>
-          <div class="cmd">cd C:\Users\User\Desktop\context_extract</div>
+          <h4>Open the project directory</h4>
+          <div class="cmd">cd path\to\context_extract</div>
         </div>
       </div>
       <div class="step">
         <div class="step-n">2</div>
         <div class="step-body">
-          <h4>ติดตั้ง dependencies</h4>
+          <h4>Install dependencies</h4>
           <div class="cmd">pip install -r requirements.txt</div>
-          <p>รอจนเสร็จ — ครั้งแรกจะโหลด BAAI/bge-m3 model ด้วย (~2.2 GB, โหลดครั้งเดียว, cache ไว้)</p>
+          <p>The first run may download the <code>BAAI/bge-m3</code> embedding model; it will be cached for future use.</p>
         </div>
       </div>
     </div>
-    <div class="info"><p>ℹ️ ถ้า pip error เรื่อง torch: <code>pip install torch --index-url https://download.pytorch.org/whl/cpu</code></p></div>
   </div>
 
   <!-- ── 5. Config ──────────────────────────── -->
   <div class="card" id="config">
-    <h2>5️⃣ ตั้งค่าโมเดล</h2>
-    <p>บอกระบบว่าจะใช้โมเดลไหน (ชื่อที่ได้จาก <code>ollama list</code>)</p>
+    <h2>5. Configure the model</h2>
+    <p>Set the LLM model name to match the output of <code>ollama list</code>.</p>
 
     <div class="step-wrap">
       <div class="step">
         <div class="step-n">A</div>
         <div class="step-body">
-          <h4>ตั้งผ่าน Environment Variable (ใช้ per session)</h4>
+          <h4>Environment variable (per session)</h4>
           <div class="cmd">$env:LLM_MODEL = "scb10x/llama3.1-typhoon2-8b-instruct"</div>
-          <p>ต้องตั้งทุกครั้งที่เปิด PowerShell ใหม่</p>
         </div>
       </div>
       <div class="step">
         <div class="step-n">B</div>
         <div class="step-body">
-          <h4>ตั้งถาวรใน config.py (แก้ครั้งเดียว ใช้ได้ตลอด)</h4>
-          <p>เปิดไฟล์ <code>backend/config.py</code> แล้วหาบรรทัดนี้:</p>
+          <h4>Project configuration: edit <code>backend/config.py</code></h4>
           <pre><code>TOPIC_NAMER_MODEL = "scb10x/llama3.1-typhoon2-8b-instruct"</code></pre>
-          <p>ตรวจสอบและเปลี่ยนให้ตรงกับชื่อที่ได้จาก ollama list ถ้าจำเป็น:</p>
-          <pre><code>TOPIC_NAMER_MODEL = "scb10x/llama3.1-typhoon2-8b-instruct"   # ← ใส่ชื่อจาก ollama list</code></pre>
+          <p>Use the exact name shown by <code>ollama list</code>.</p>
         </div>
       </div>
     </div>
@@ -322,224 +311,145 @@
 
   <!-- ── 6. Run Pipeline ────────────────────── -->
   <div class="card" id="run">
-    <h2>6️⃣ รัน Pipeline ครั้งแรก</h2>
+    <h2>6. Run the pipeline</h2>
     <div class="step-wrap">
       <div class="step">
         <div class="step-n">1</div>
         <div class="step-body">
-          <h4>รัน pipeline + server รวมกัน</h4>
+          <h4>Start the server</h4>
           <div class="cmd">python backend/main.py --input data/conversations.json --serve</div>
-          <p>ดู console log จะเห็นแต่ละ Stage ทำงาน:</p>
-          <pre><code>Stage 1: Loading dataset...       → 500 records
-Stage 2: Cleaning text...
-Stage 3: Filtering questions...   → 487 valid
-Stage 3.5: LLM FAQ extraction...  ← ตรงนี้ใช้เวลานานสุด
-  Batch 1/17: rows 0–29
-  → 8 FAQs extracted
-  ...
-Stage 4: Embeddings (bge-m3)...   ← ครั้งแรกโหลด model
-Stage 4.5: UMAP reduction...
-Stage 6: HDBSCAN clustering...
-Stage 8: LLM group naming...
-Pipeline complete! 12 groups, 89 FAQ pairs
-Starting API at http://0.0.0.0:8000</code></pre>
+          <p>The console will display each stage. LLM extraction (Stage 4) is typically the longest step, especially on CPU.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-n green">2</div>
         <div class="step-body">
-          <h4>เปิด Browser</h4>
+          <h4>Open the dashboard</h4>
           <div class="cmd" style="cursor:pointer;" onclick="window.open('http://localhost:8000')">http://localhost:8000</div>
-          <div class="success"><p>✅ เห็น Dashboard = สำเร็จ!</p></div>
+          <div class="success"><p>When the pipeline finishes, the server is ready and the dashboard will load.</p></div>
         </div>
       </div>
-    </div>
-
-    <div class="warn">
-      <p>⚠️ <strong>Stage 3.5 ช้ากว่า Stage อื่น</strong> — ปกติครับ เพราะต้อง call Ollama ทุก 30 บทสนทนา
-        500 บทสนทนา = ~17 calls = ใช้เวลาประมาณ 2–10 นาที ขึ้นอยู่กับ CPU/GPU</p>
     </div>
   </div>
 
   <!-- ── 7. UI Guide ────────────────────────── -->
   <div class="card" id="use-ui">
-    <h2>7️⃣ วิธีใช้งาน UI</h2>
+    <h2>7. Using the dashboard</h2>
     <div class="table-wrap">
       <table>
-        <tr><th>Tab</th><th>ทำอะไร</th></tr>
-        <tr><td>📂 <strong>Upload Data</strong></td><td>อัปโหลดไฟล์ Excel/CSV/JSON → Map column คำถาม/คำตอบ</td></tr>
-        <tr><td>✏️ <strong>Data Manipulation</strong></td><td>แก้ไขข้อมูลดิบก่อน analyze (ไม่บังคับ)</td></tr>
-        <tr><td>⚙️ <strong>Process &amp; Analyze</strong></td><td>กด ▶ Start Analysis → ดู live log จนครบ 100%</td></tr>
-        <tr><td>❓ <strong>FAQ Library</strong></td><td>ดู FAQ ทั้งหมด กรองตามกลุ่ม</td></tr>
-        <tr><td>🔍 <strong>Smart Search</strong></td><td>ค้นหาด้วย AI — เข้าใจความหมาย ไม่ใช่แค่ keyword</td></tr>
-        <tr><td>🔗 <strong>Topic Groups</strong></td><td>ดูกลุ่มทั้งหมด จำนวน FAQ ต่อกลุ่ม</td></tr>
-        <tr><td>📊 <strong>Reports &amp; Charts</strong></td><td>สถิติ: จำนวน FAQ กลุ่ม noise ratio</td></tr>
-        <tr><td>🗂️ <strong>Data Management</strong></td><td>ย้ายกลุ่ม / ลบ FAQ — rebuild index อัตโนมัติ</td></tr>
-        <tr><td>📖 <strong>User Manual</strong></td><td>คู่มือที่คุณกำลังอ่านนี้</td></tr>
+        <tr><th>Page</th><th>Description</th></tr>
+        <tr><td><strong>Upload Data</strong></td><td>Upload Excel, CSV, or JSON and map the columns used as Question and Answer.</td></tr>
+        <tr><td><strong>Data Manipulation</strong></td><td>Optionally review and edit the uploaded dataset before analysis.</td></tr>
+        <tr><td><strong>Process &amp; Analyze</strong></td><td>Start the extraction workflow and monitor the progress log in real time.</td></tr>
+        <tr><td><strong>FAQ Library</strong></td><td>Browse extracted FAQs grouped by topic.</td></tr>
+        <tr><td><strong>Smart Search</strong></td><td>Semantic search across extracted FAQs using embedding similarity.</td></tr>
+        <tr><td><strong>Reports &amp; Charts</strong></td><td>Operational metrics and summaries of the extraction output.</td></tr>
+        <tr><td><strong>Data Management</strong></td><td>Edit, merge, or delete groups. Changes are persisted and the search index is rebuilt.</td></tr>
+        <tr><td><strong>3D Visualization</strong></td><td>Explore extracted FAQ items as 3D data points, with group-based highlighting.</td></tr>
       </table>
     </div>
   </div>
 
   <!-- ── 8. Pipeline ────────────────────────── -->
   <div class="card" id="pipeline">
-    <h2>8️⃣ ขั้นตอนการทำงาน (Pipeline)</h2>
+    <h2>8. Pipeline overview</h2>
     <div class="pipe">
       <div class="pipe-row">
         <div class="pipe-num normal">1–3</div>
-        <div class="pipe-content"><b>Load → Clean → Filter</b><p>โหลดไฟล์ ทำความสะอาดข้อความ คัดกรอง Q&amp;A ที่มีประโยชน์</p></div>
+        <div class="pipe-content"><b>Load → Clean → Filter</b><p>Load file, clean text, filter valid Q&amp;A pairs.</p></div>
       </div>
       <div class="pipe-row">
-        <div class="pipe-num new">3.5 ใหม่</div>
-        <div class="pipe-content"><b>🤖 LLM Batch FAQ Extraction (Ollama)</b>
-          <p>แบ่งบทสนทนาเป็น batch → ส่ง Ollama/Typhoon อ่านและสกัด {question, answer} → รวม FAQ ทุก batch</p></div>
+        <div class="pipe-num new">4</div>
+        <div class="pipe-content"><b>LLM FAQ extraction (Ollama)</b><p>Data is split into batches; each batch is sent to the LLM to extract FAQ pairs and assign a group name. Results are merged across batches.</p></div>
       </div>
       <div class="pipe-row">
-        <div class="pipe-num normal">4</div>
-        <div class="pipe-content"><b>Embed FAQ Questions (BAAI/bge-m3)</b><p>แปลงคำถามเป็น Vector 1024 มิติ รองรับภาษาไทยโดยตรง | Cache อัตโนมัติ</p></div>
+        <div class="pipe-num normal">5</div>
+        <div class="pipe-content"><b>Merge batches</b><p>Groups are merged by name (embedding similarity); duplicate questions are deduplicated and mention counts summed.</p></div>
       </div>
       <div class="pipe-row">
-        <div class="pipe-num new">4.5 ใหม่</div>
-        <div class="pipe-content"><b>UMAP Reduction</b><p>ลด 1024 → 8 มิติ เพื่อให้ HDBSCAN ทำงานแม่นยำขึ้น | Cache อัตโนมัติ</p></div>
-      </div>
-      <div class="pipe-row">
-        <div class="pipe-num normal">5–7</div>
-        <div class="pipe-content"><b>Dedup → HDBSCAN → Quality Filter</b><p>ลบซ้ำ จัดกลุ่ม FAQ ที่ถามเรื่องเดียวกัน ตัดกลุ่มที่คุณภาพต่ำออก</p></div>
-      </div>
-      <div class="pipe-row">
-        <div class="pipe-num llm">8 LLM</div>
-        <div class="pipe-content"><b>🤖 Group Naming (Ollama)</b><p>Ollama ตั้งชื่อกลุ่มเป็นภาษาไทย เช่น "ปัญหาการเข้าระบบ MT5"</p></div>
-      </div>
-      <div class="pipe-row">
-        <div class="pipe-num normal">9–11</div>
-        <div class="pipe-content"><b>Group Assembly → FAISS Index</b><p>รวบรวม FAQ ต่อกลุ่ม เรียงตาม relevance สร้าง Semantic Search Index</p></div>
+        <div class="pipe-num normal">6–7</div>
+        <div class="pipe-content"><b>Search index &amp; save</b><p>Build FAISS index from group questions (BAAI/bge-m3). Save FAQs and analytics.</p></div>
       </div>
     </div>
   </div>
 
   <!-- ── 9. Output ──────────────────────────── -->
   <div class="card" id="output">
-    <h2>9️⃣ รูปแบบผลลัพธ์</h2>
-    <p>ไฟล์ <code>data/faqs.json</code> และ API <code>GET /groups</code></p>
+    <h2>9. Output format</h2>
+    <p>Results are written to <code>data/faqs.json</code> and exposed via <code>GET /groups</code>.</p>
     <pre><code>{
   "total_groups": 5,
   "groups": [
     {
       "group_id": 0,
-      "group_name": "ปัญหาการเข้าระบบ MT5",
+      "group_name": "ปัญหาการเข้าสู่ระบบ",
       "total_faqs": 8,
       "faqs": [
-        {
-          "question": "MT5 เข้าระบบไม่ได้ทำอย่างไร",
-          "answer": "กรุณารีเซ็ตรหัสผ่านผ่านหน้า Forgot Password..."
-        },
-        {
-          "question": "ลืมรหัสผ่าน MT5 ทำยังไง",
-          "answer": "ติดต่อ Support ผ่าน Line @xxx..."
-        }
+        { "question": "ลืมรหัสผ่านต้องทำอย่างไร", "answer": "กรุณากด “ลืมรหัสผ่าน” ที่หน้าล็อกอินและทำตามขั้นตอน...", "mention_count": 3 }
       ]
     }
   ]
 }</code></pre>
-    <div class="success"><p>✅ นำ <code>groups[].faqs</code> ไป import ใส่ Chatbot knowledge base ได้เลย</p></div>
+    <p>Use <code>groups[].faqs</code> to feed a chatbot knowledge base or export via the UI.</p>
   </div>
 
   <!-- ── 10. Settings ───────────────────────── -->
   <div class="card" id="settings">
-    <h2>🔧 ตั้งค่าสำคัญ (config.py)</h2>
+    <h2>10. Configuration (config.py)</h2>
 
-    <h3>Ollama / LLM</h3>
+    <h3>LLM (Ollama)</h3>
     <div class="table-wrap">
       <table>
-        <tr><th>Setting</th><th>Default</th><th>คำอธิบาย</th></tr>
-        <tr><td><code>TOPIC_NAMER_PROVIDER</code></td><td><code>"ollama"</code></td><td>เปลี่ยนเป็น <code>"mock"</code> เพื่อทดสอบโดยไม่ใช้ LLM</td></tr>
-        <tr><td><code>TOPIC_NAMER_MODEL</code></td><td><code>scb10x/typhoon...</code></td><td><strong>เปลี่ยนให้ตรงกับ <code>ollama list</code></strong></td></tr>
-        <tr><td><code>TOPIC_NAMER_OLLAMA_URL</code></td><td><code>http://localhost:11434/...</code></td><td>เปลี่ยนถ้า Ollama อยู่บน Server อื่น</td></tr>
+        <tr><th>Setting</th><th>Description</th></tr>
+        <tr><td><code>TOPIC_NAMER_MODEL</code></td><td>Must match <code>ollama list</code>. Default: scb10x/llama3.1-typhoon2-8b-instruct.</td></tr>
+        <tr><td><code>OLLAMA_TIMEOUT</code></td><td>Env var. Default <code>none</code> (no timeout, suitable for CPU). Set seconds to limit.</td></tr>
       </table>
     </div>
 
-    <h3>FAQ Extraction (Stage 3.5)</h3>
+    <h3>Batch &amp; merge</h3>
     <div class="table-wrap">
       <table>
-        <tr><th>Setting</th><th>Default</th><th>คำอธิบาย</th></tr>
-        <tr><td><code>FAQ_EXTRACTION_BATCH_SIZE</code></td><td><code>30</code></td><td>บทสนทนาต่อ LLM call — ลดถ้าโมเดล context window เล็ก (3b model: ลองใช้ 15)</td></tr>
-        <tr><td><code>FAQ_PER_BATCH</code></td><td><code>8</code></td><td>FAQ สูงสุดต่อ batch — เพิ่มเพื่อ coverage</td></tr>
-        <tr><td><code>FAQ_DEDUP_SIMILARITY_THRESHOLD</code></td><td><code>0.90</code></td><td>ลดเพื่อเก็บ FAQ ที่คล้ายกัน</td></tr>
+        <tr><th>Setting</th><th>Description</th></tr>
+        <tr><td><code>FAQ_N_SPLITS</code></td><td>Number of data splits for parallel-style processing.</td></tr>
+        <tr><td><code>FAQ_EXTRACTION_BATCH_SIZE</code></td><td>Conversations per LLM call.</td></tr>
+        <tr><td><code>MERGE_QUESTION_SIMILARITY_THRESHOLD</code></td><td>Cosine threshold for merging duplicate questions (e.g. 0.88).</td></tr>
+        <tr><td><code>MERGE_GROUP_USE_EMBEDDING</code></td><td>Use embedding similarity for group names (recommended).</td></tr>
       </table>
     </div>
-
-    <h3>Clustering</h3>
-    <div class="table-wrap">
-      <table>
-        <tr><th>Setting</th><th>Default</th><th>คำอธิบาย</th></tr>
-        <tr><td><code>CLUSTER_MIN_CLUSTER_SIZE</code></td><td><code>3</code></td><td>ลดเป็น 2 สำหรับชุดข้อมูลน้อยกว่า 200 บทสนทนา</td></tr>
-        <tr><td><code>UMAP_N_COMPONENTS</code></td><td><code>8</code></td><td>มิติ UMAP</td></tr>
-      </table>
-    </div>
-
-    <div class="warn"><p>⚠️ ชุดข้อมูลเล็ก (&lt;100 บทสนทนา): ลด <code>CLUSTER_MIN_CLUSTER_SIZE=2</code>, <code>FAQ_EXTRACTION_BATCH_SIZE=10</code></p></div>
   </div>
 
   <!-- ── 11. Troubleshoot ───────────────────── -->
   <div class="card" id="troubleshoot">
-    <h2>🔧 แก้ปัญหาที่พบบ่อย</h2>
+    <h2>11. Troubleshooting</h2>
     <div class="table-wrap">
       <table>
-        <tr><th>ปัญหา</th><th>สาเหตุ</th><th>วิธีแก้</th></tr>
-        <tr>
-          <td><code>ollama: not recognized</code></td>
-          <td>ยังไม่ได้ปิด-เปิด PowerShell</td>
-          <td>ปิดและเปิด PowerShell ใหม่หลังติดตั้ง Ollama</td>
-        </tr>
-        <tr>
-          <td>"No FAQ pairs extracted"</td>
-          <td>Ollama ไม่ตอบสนอง / โมเดลยังไม่พร้อม</td>
-          <td>รัน <code>ollama list</code> ตรวจสอบโมเดล, ตรวจ <code>TOPIC_NAMER_MODEL</code> ใน config</td>
-        </tr>
-        <tr>
-          <td>ชื่อกลุ่มเป็น "กลุ่มที่ 1"</td>
-          <td>Ollama ล้มเหลว ใช้ mock fallback</td>
-          <td>ดู error ใน console — มักเป็น model name ผิด</td>
-        </tr>
-        <tr>
-          <td>FAQ ได้น้อยมาก</td>
-          <td><code>CLUSTER_MIN_CLUSTER_SIZE</code> สูงเกิน</td>
-          <td>ลดเป็น 2 ใน config.py</td>
-        </tr>
-        <tr>
-          <td>Stage 3.5 ช้ามาก</td>
-          <td>LLM call จำนวนมาก (ปกติ)</td>
-          <td>เพิ่ม <code>FAQ_EXTRACTION_BATCH_SIZE</code> เป็น 50</td>
-        </tr>
-        <tr>
-          <td>bge-m3 โหลดนาน</td>
-          <td>โหลดครั้งแรก 2.2 GB</td>
-          <td>รอแค่ครั้งแรก — ครั้งถัดไป cache hit ทันที</td>
-        </tr>
-        <tr>
-          <td>Port 8000 ถูกใช้งาน</td>
-          <td>มี process อื่นใช้ port อยู่</td>
-          <td>Pipeline จะ kill process เก่าอัตโนมัติ หรือรัน <code>--port 8001</code></td>
-        </tr>
+        <tr><th>Issue</th><th>Solution</th></tr>
+        <tr><td><code>ollama: not recognized</code></td><td>Close and reopen PowerShell after installing Ollama.</td></tr>
+        <tr><td>No FAQ pairs extracted</td><td>Ensure Ollama is running and the model is pulled. Run <code>ollama list</code> and set <code>TOPIC_NAMER_MODEL</code> to that exact name.</td></tr>
+        <tr><td>Pipeline very slow</td><td>Normal on CPU. No timeout by default. You can increase <code>FAQ_EXTRACTION_BATCH_SIZE</code> to reduce the number of LLM calls.</td></tr>
+        <tr><td>bge-m3 download slow</td><td>First run only (~2.2 GB); subsequent runs use the cache.</td></tr>
+        <tr><td>Port 8000 in use</td><td>The pipeline may kill the previous process on start, or use <code>--port 8001</code>.</td></tr>
       </table>
     </div>
   </div>
 
   <!-- ── 12. API ─────────────────────────────── -->
   <div class="card" id="api">
-    <h2>🔌 API Reference</h2>
-    <p>Base URL: <code>http://localhost:8000</code> | Swagger: <a href="/docs">/docs</a></p>
+    <h2>12. API reference</h2>
+    <p>Base URL: <code>http://localhost:8000</code> · Interactive docs: <a href="/docs">/docs</a></p>
     <div class="table-wrap">
       <table>
-        <tr><th>Method</th><th>Endpoint</th><th>คำอธิบาย</th></tr>
-        <tr><td>GET</td><td><code>/groups</code></td><td><strong>หลัก</strong> — FAQ groups พร้อม Q&amp;A list ครบ</td></tr>
-        <tr><td>GET</td><td><code>/faqs</code></td><td>Legacy alias ของ /groups</td></tr>
-        <tr><td>POST</td><td><code>/search</code></td><td>Semantic search: <code>{"query":"..."}</code></td></tr>
-        <tr><td>GET</td><td><code>/analytics</code></td><td>รายงานสถิติ</td></tr>
-        <tr><td>GET</td><td><code>/pipeline-status</code></td><td>ดูความคืบหน้า pipeline</td></tr>
-        <tr><td>POST</td><td><code>/upload</code></td><td>อัปโหลดไฟล์ข้อมูล</td></tr>
-        <tr><td>POST</td><td><code>/run-pipeline</code></td><td>เริ่ม analysis จาก API</td></tr>
-        <tr><td>POST</td><td><code>/faqs/relabel</code></td><td>ย้าย FAQ ไปกลุ่มอื่น</td></tr>
-        <tr><td>POST</td><td><code>/faqs/delete</code></td><td>ลบ FAQ</td></tr>
+        <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>GET</td><td><code>/groups</code></td><td>FAQ groups with full Q&amp;A lists</td></tr>
+        <tr><td>GET</td><td><code>/faqs</code></td><td>Same as /groups (legacy)</td></tr>
+        <tr><td>POST</td><td><code>/search</code></td><td>Semantic search: <code>{"query":"...", "top_k":5}</code></td></tr>
+        <tr><td>GET</td><td><code>/analytics</code></td><td>Analytics report</td></tr>
+        <tr><td>GET</td><td><code>/pipeline-status</code></td><td>Pipeline progress (poll during run)</td></tr>
+        <tr><td>POST</td><td><code>/upload</code></td><td>Upload data file</td></tr>
+        <tr><td>POST</td><td><code>/run-pipeline</code></td><td>Start analysis (background)</td></tr>
+        <tr><td>POST</td><td><code>/faqs/relabel</code></td><td>Move selected groups to another group</td></tr>
+        <tr><td>POST</td><td><code>/faqs/delete</code></td><td>Delete groups by index</td></tr>
+        <tr><td>POST</td><td><code>/faqs/merge-groups</code></td><td>Merge one group into another</td></tr>
       </table>
     </div>
   </div>

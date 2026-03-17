@@ -68,13 +68,38 @@ _analytics_report: dict = {}
 _valid_questions: list[str] = []
 _valid_embeddings: np.ndarray = np.empty((0,))
 
+# ── Helpers (data normalization) ──────────────────────────────────────────────
+
+def _normalize_groups_in_place(groups: list[dict]) -> list[dict]:
+    """
+    Ensure groups have stable, unique group_id/cluster_id and expected fields.
+    This prevents UI issues when legacy files contain duplicate or missing IDs.
+    """
+    if not groups:
+        return []
+    for i, g in enumerate(groups):
+        if not isinstance(g, dict):
+            continue
+        g["group_id"] = i
+        g["cluster_id"] = i
+        g["group_name"] = (g.get("group_name") or "").strip() or "Other"
+        faqs = g.get("faqs", [])
+        if not isinstance(faqs, list):
+            faqs = []
+        g["faqs"] = faqs
+        g["total_faqs"] = int(g.get("total_faqs", len(faqs)) or len(faqs))
+        g["total_questions"] = int(g.get("total_questions", g["total_faqs"]) or g["total_faqs"])
+        if "support_count" not in g or g.get("support_count") is None:
+            g["support_count"] = sum(int(f.get("mention_count", 1) or 1) for f in faqs if isinstance(f, dict))
+    return groups
+
 # ── Pipeline State (thread-safe progress tracking) ────────────────────────────
 
 _pipeline_lock = threading.Lock()
 _pipeline_state = {
     "status": "idle",          # idle | running | done | error
     "stage": 0,
-    "total_stages": 13,
+    "total_stages": 7,
     "stage_name": "",
     "logs": [],
     "started_at": None,
@@ -116,7 +141,7 @@ def set_pipeline_state(faq_index, faqs, analytics, valid_questions, valid_embedd
     """Called by main.py after pipeline completes to inject state into API."""
     global _faq_index, _faqs, _analytics_report, _valid_questions, _valid_embeddings
     _faq_index = faq_index
-    _faqs = faqs
+    _faqs = _normalize_groups_in_place(list(faqs or []))
     _analytics_report = analytics
     _valid_questions = valid_questions
     _valid_embeddings = valid_embeddings
@@ -128,123 +153,27 @@ def set_pipeline_state(faq_index, faqs, analytics, valid_questions, valid_embedd
 def _run_pipeline_thread(input_file: str):
     global _faq_index, _faqs, _analytics_report, _valid_questions, _valid_embeddings
 
+    def progress_cb(stage: int, stage_name: str, message: str):
+        _log(message, stage=stage, stage_name=stage_name)
+
     try:
         _reset_pipeline_state(input_file)
-
-        _log("Stage 1: Loading dataset…", stage=1, stage_name="Loading dataset")
-        from backend.data_loader import load_dataset
-        raw_df = load_dataset(input_file)
-        _log(f"  → Loaded {len(raw_df)} records.")
-
-        _log("Stage 2: Cleaning text…", stage=2, stage_name="Cleaning text")
-        from backend.text_cleaner import clean_questions
-        cleaned_df = clean_questions(raw_df)
-        _log(f"  → {len(cleaned_df)} rows after cleaning.")
-
-        _log("Stage 3: Filtering questions…", stage=3, stage_name="Filtering questions")
-        from backend.question_filter import filter_questions
-        valid_df = filter_questions(cleaned_df)
-        _log(f"  → {len(valid_df)} valid questions retained.")
-
-        if len(valid_df) == 0:
-            raise RuntimeError("No valid questions after filtering. Check your dataset.")
-
-        _log("Stage 3.5: LLM Batch FAQ extraction (Ollama/Typhoon)…", stage=3, stage_name="LLM FAQ extraction")
-        from backend.llm_extractor import extract_all_faqs
-        from backend.config import FAQ_EXTRACTION_BATCH_SIZE
-        faq_df = extract_all_faqs(valid_df, batch_size=FAQ_EXTRACTION_BATCH_SIZE)
-        if len(faq_df) == 0:
-            raise RuntimeError(
-                "No FAQ pairs extracted. Ensure Ollama is running and the model is loaded."
-            )
-        _log(f"  → {len(faq_df)} canonical FAQ pairs extracted.")
-
-        _log("Stage 4: Embedding extracted FAQ questions (bge-m3)…", stage=4, stage_name="Generating embeddings")
-        from backend.embedding_service import generate_embeddings, l2_normalize
-        from backend.config import EMBEDDINGS_CACHE_FILE, EMBEDDINGS_IDS_CACHE_FILE
-        full_embeddings, faq_df = generate_embeddings(
-            faq_df, use_cache=True,
-            cache_file=EMBEDDINGS_CACHE_FILE,
-            ids_cache_file=EMBEDDINGS_IDS_CACHE_FILE,
+        from backend.main import run_pipeline
+        state = run_pipeline(input_file, progress_callback=progress_cb)
+        set_pipeline_state(
+            faq_index=state["faq_index"],
+            faqs=state["groups"],
+            analytics=state["analytics"],
+            valid_questions=state["valid_questions"],
+            valid_embeddings=state["valid_embeddings"],
         )
-        _log(f"  → Embeddings shape: {full_embeddings.shape}")
-
-        _log("Stage 4.5: UMAP dimensionality reduction…", stage=4, stage_name="UMAP reduction")
-        from backend.umap_reducer import reduce_dimensions
-        from backend.config import UMAP_CACHE_FILE, UMAP_PARAMS_CACHE_FILE
-        reduced_embeddings = reduce_dimensions(
-            full_embeddings, use_cache=True,
-            cache_file=UMAP_CACHE_FILE,
-            params_cache_file=UMAP_PARAMS_CACHE_FILE,
-        )
-        _log(f"  → Reduced shape: {reduced_embeddings.shape}")
-
-        _log("Stage 5: Deduplicating extracted FAQs…", stage=5, stage_name="Deduplicating")
-        from backend.deduplication import deduplicate
-        unique_faq_df, full_faq_flags = deduplicate(faq_df, full_embeddings)
-        unique_mask = ~full_faq_flags["is_duplicate"].values
-        unique_full_embs = full_embeddings[unique_mask]
-        unique_reduced_embs = reduced_embeddings[unique_mask]
-        _log(f"  → {len(unique_faq_df)} unique FAQ pairs after dedup.")
-
-        if len(unique_faq_df) == 0:
-            raise RuntimeError("All extracted FAQs were deduplicated. Lower FAQ_DEDUP_SIMILARITY_THRESHOLD.")
-
-        _log("Stage 6: Clustering with HDBSCAN (UMAP space)…", stage=6, stage_name="HDBSCAN clustering")
-        from backend.clustering import run_clustering
-        clustered_df = run_clustering(unique_faq_df, unique_reduced_embs)
-
-        _log("Stage 7: Filtering cluster quality…", stage=7, stage_name="Cluster quality filter")
-        from backend.clustering import filter_clusters
-        clustered_df = filter_clusters(clustered_df, unique_reduced_embs)
-        n_clusters = len([c for c in clustered_df["cluster_id"].unique() if c != -1])
-        _log(f"  → {n_clusters} quality clusters retained.")
-
-        _log("Stages 8–10: LLM group naming & FAQ group assembly…", stage=8, stage_name="Group generation")
-        from backend.topic_namer import build_namer_fn
-        from backend.faq_generator import generate_groups
-        name_fn = build_namer_fn()
-        groups = generate_groups(clustered_df, unique_full_embs, name_fn)
-        total_faq_pairs = sum(g.get("total_faqs", 0) for g in groups)
-        _log(f"  → {len(groups)} groups, {total_faq_pairs} FAQ pairs total.")
-
-        _log("Stage 11: Building FAISS search index…", stage=11, stage_name="Building search index")
-        from backend.search_index import FAQSearchIndex
-        faq_index = FAQSearchIndex()
-        if groups:
-            faq_index.build(groups)
-            faq_index.save()
-
-        _log("Saving outputs…", stage=12, stage_name="Saving outputs")
-        os.makedirs(os.path.dirname(FAQ_OUTPUT_FILE), exist_ok=True)
-        with open(FAQ_OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump({"total_groups": len(groups), "groups": groups}, f, ensure_ascii=False, indent=2)
-
-        _log("Stage 13: Running analytics…", stage=13, stage_name="Analytics")
-        from backend.analytics import generate_analytics
-        analytics = generate_analytics(raw_df, full_faq_flags, unique_faq_df, clustered_df, groups)
-        os.makedirs(os.path.dirname(ANALYTICS_OUTPUT_FILE), exist_ok=True)
-        with open(ANALYTICS_OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump(analytics, f, ensure_ascii=False, indent=2)
-
-        # Inject into API state — expose canonical FAQ questions for /similar_questions
-        valid_questions = unique_faq_df["clean_question"].tolist()
-        valid_embs = l2_normalize(unique_full_embs)
-        set_pipeline_state(faq_index, groups, analytics, valid_questions, valid_embs)
-
-        import gc
-        try:
-            del raw_df, valid_df, faq_df, full_embeddings, reduced_embeddings, unique_faq_df, full_faq_flags, clustered_df
-        except UnboundLocalError:
-            pass
-        gc.collect()
-
-        _log(f"✅ Pipeline complete! {len(groups)} groups, {total_faq_pairs} FAQ pairs.")
+        n_groups = len(state["groups"])
+        n_items = sum(g.get("total_faqs", 0) for g in state["groups"])
+        _log(f"✅ Pipeline complete! {n_groups} groups, {n_items} FAQ items.")
         with _pipeline_lock:
             _pipeline_state["status"] = "done"
-            _pipeline_state["faq_count"] = len(groups)
+            _pipeline_state["faq_count"] = n_groups
             _pipeline_state["finished_at"] = time.time()
-
     except Exception as exc:
         err_msg = f"❌ Pipeline failed: {exc}"
         _log(err_msg)
@@ -257,9 +186,26 @@ def _run_pipeline_thread(input_file: str):
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
+def _load_groups_from_disk() -> list:
+    """Load groups from FAQ_OUTPUT_FILE. Supports both {groups: []} and plain list."""
+    if not os.path.isfile(FAQ_OUTPUT_FILE):
+        return []
+    try:
+        with open(FAQ_OUTPUT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "groups" in data:
+            return _normalize_groups_in_place(list(data["groups"] or []))
+        if isinstance(data, list):
+            return _normalize_groups_in_place(list(data))
+        return []
+    except Exception as e:
+        logger.warning(f"Could not load {FAQ_OUTPUT_FILE}: {e}")
+        return []
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """On startup: load any pre-built FAISS index and FAQ data from disk."""
+    """On startup: load FAISS index and FAQ data from disk."""
     global _faq_index, _faqs, _analytics_report
 
     from backend.search_index import FAQSearchIndex
@@ -267,18 +213,29 @@ async def lifespan(app: FastAPI):
     loaded = index.load(FAISS_INDEX_FILE, FAISS_META_FILE)
     if loaded:
         _faq_index = index
-        _faqs = index.faqs
+        _faqs = _normalize_groups_in_place(list(index.faqs or []))
+    else:
+        groups = _load_groups_from_disk()
+        if groups:
+            _faqs = _normalize_groups_in_place(list(groups or []))
+            index.build(groups)
+            index.save()
+            _faq_index = index
+            logger.info(f"Loaded {len(groups)} groups from {FAQ_OUTPUT_FILE} and built search index.")
 
     if os.path.isfile(ANALYTICS_OUTPUT_FILE):
-        with open(ANALYTICS_OUTPUT_FILE, "r", encoding="utf-8") as f:
-            _analytics_report = json.load(f)
+        try:
+            with open(ANALYTICS_OUTPUT_FILE, "r", encoding="utf-8") as f:
+                _analytics_report = json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load analytics: {e}")
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     if _faqs:
-        logger.info(f"API ready: {len(_faqs)} FAQs loaded from disk.")
+        logger.info(f"API ready: {len(_faqs)} groups loaded.")
     else:
-        logger.warning("No pre-built FAQ data found. Upload a file and run the pipeline from the UI.")
+        logger.warning("No FAQ data found. Upload a file and run the pipeline from the UI.")
 
     yield
 
@@ -323,6 +280,15 @@ def create_app() -> FastAPI:
     class RelabelFAQsRequest(BaseModel):
         indices: list[int] = Field(..., description="List of FAQ indices (0-based) to relabel.")
         new_cluster_id: int = Field(..., description="The ID of the new cluster/group.")
+
+    class EditFAQRequest(BaseModel):
+        index: int = Field(..., description="0-based index of the FAQ to edit.")
+        question: str = Field(None, description="New question text.")
+        answer: str = Field(None, description="New answer text.")
+
+    class MergeGroupsRequest(BaseModel):
+        source_group_id: int = Field(..., description="ID of the group to be merged.")
+        target_group_id: int = Field(..., description="ID of the group to merge into.")
 
     class PreviewDataRequest(BaseModel):
         file_path: str = Field(..., description="Absolute path of the uploaded file to preview.")
@@ -521,15 +487,18 @@ def create_app() -> FastAPI:
             if _pipeline_state["status"] == "running":
                 raise HTTPException(status_code=409, detail="Pipeline is already running.")
 
-        # Resolve input file
+        # Resolve input file (prefer mapped data from UI)
         input_file = req.input_file.strip() if req.input_file else ""
         if not input_file:
-            # Try last uploaded file
-            for ext in [".json", ".csv", ".xlsx", ".xls"]:
-                candidate = os.path.join(UPLOAD_DIR, f"input{ext}")
-                if os.path.isfile(candidate):
-                    input_file = candidate
-                    break
+            mapped_path = os.path.join(UPLOAD_DIR, "input_mapped.json")
+            if os.path.isfile(mapped_path):
+                input_file = mapped_path
+            else:
+                for ext in [".json", ".csv", ".xlsx", ".xls"]:
+                    candidate = os.path.join(UPLOAD_DIR, f"input{ext}")
+                    if os.path.isfile(candidate):
+                        input_file = candidate
+                        break
         if not input_file:
             input_file = DEFAULT_INPUT_FILE
 
@@ -563,19 +532,17 @@ def create_app() -> FastAPI:
     @app.get("/groups", tags=["FAQs"])
     async def get_groups(limit: int = Query(default=100, ge=1, le=10000)):
         """
-        Return FAQ groups in the canonical new schema:
-        { total_groups, groups: [{group_id, group_name, total_questions,
-          representative_questions, suggested_admin_reply}] }
+        Return FAQ groups in the canonical new schema.
+        Returns empty list when no pipeline has been run (no 503).
         """
-        _require_index()
-        groups = _faq_index.groups[:limit]
-        return {"total_groups": len(_faq_index.groups), "groups": groups}
+        groups = (_faq_index.groups[:limit] if _faq_index and _faq_index.is_ready else _faqs[:limit]) if _faqs else []
+        return {"total_groups": len(_faqs) if _faqs else 0, "groups": groups}
 
     @app.get("/faqs", tags=["FAQs"])
     async def get_faqs(limit: int = Query(default=100, ge=1, le=10000)):
-        """Backwards-compatible FAQ list. Also exposes group_name field."""
-        _require_index()
-        return {"faqs": _faqs[:limit], "total": len(_faqs)}
+        """Backwards-compatible FAQ list. Returns empty when no data (no 503)."""
+        data = (_faqs[:limit] if _faqs else [])
+        return {"faqs": data, "total": len(_faqs) if _faqs else 0}
 
     @app.post("/search", tags=["Search"])
     async def search_faqs(req: SearchRequest) -> dict[str, Any]:
@@ -595,27 +562,41 @@ def create_app() -> FastAPI:
 
     @app.get("/clusters", tags=["Analytics"])
     async def get_clusters() -> dict[str, Any]:
-        _require_index()
-        if not _analytics_report:
-            raise HTTPException(503, "Analytics report not available. Run the pipeline first.")
-        return {
-            "clusters": _analytics_report.get("cluster_sizes", []),
-            "total_clusters": len(_analytics_report.get("cluster_sizes", [])),
-        }
+        """Return cluster list for UI. When no analytics, derive from current groups (no 503)."""
+        if _analytics_report and _analytics_report.get("cluster_sizes"):
+            clusters = _analytics_report["cluster_sizes"]
+        elif _faqs:
+            clusters = [
+                {
+                    "cluster_id": g.get("cluster_id", g.get("group_id", i)),
+                    "group_name": g.get("group_name", "Other"),
+                    "size": g.get("total_faqs", len(g.get("faqs", []))),
+                    "support_count": g.get("support_count", 0),
+                }
+                for i, g in enumerate(_faqs)
+            ]
+        else:
+            clusters = []
+        return {"clusters": clusters, "total_clusters": len(clusters)}
 
     @app.get("/analytics", tags=["Analytics"])
     async def get_analytics() -> dict[str, Any]:
-        _require_index()
+        """Return analytics report. Empty structure when none (no 503)."""
         if not _analytics_report:
-            raise HTTPException(503, "Analytics report not available. Run the pipeline first.")
+            return {
+                "summary": {},
+                "top_faq_topics": [],
+                "cluster_sizes": [],
+                "unanswered_noise_questions": [],
+            }
         return _analytics_report
 
     @app.get("/visualization-data", tags=["Visualization"])
     async def get_visualization_data() -> dict[str, Any]:
         """
-        Return 3D PCA projection of FAQ question embeddings for interactive
-        cluster visualization. Supports Thai and English questions.
-        Encoded with Sentence Transformers, projected via numpy SVD PCA.
+        Return 3D PCA projection for interactive visualization:
+        - Each point represents an extracted FAQ item (question).
+        - Points are colored/filtered by their parent group (cluster_id).
         """
         if not _faqs:
             raise HTTPException(404, "No FAQs available. Run the pipeline first.")
@@ -623,26 +604,49 @@ def create_app() -> FastAPI:
         try:
             from backend.embedding_service import encode_texts, l2_normalize
 
-            # Use group_name as the text to visualise; fall back to faq_question for compat
-            labels     = [f.get("group_name") or f.get("faq_question", "") for f in _faqs]
-            raw_embs   = encode_texts(labels)          # (n, D)
-            norm_embs  = l2_normalize(raw_embs)        # L2-normalise for cosine
-            coords_3d  = _pca_3d(norm_embs)            # (n, 3) via SVD PCA
+            rows: list[dict[str, Any]] = []
+            texts: list[str] = []
 
-            points = [
-                {
-                    "x":             float(coords_3d[i, 0]),
-                    "y":             float(coords_3d[i, 1]),
-                    "z":             float(coords_3d[i, 2]),
-                    "cluster_id":    faq.get("cluster_id", faq.get("group_id", 0)),
-                    "faq_question":  faq.get("group_name") or faq.get("faq_question", ""),
-                    "faq_answer":    faq.get("suggested_admin_reply") or faq.get("faq_answer", ""),
-                    "support_count": faq.get("total_questions", faq.get("support_count", 0)),
-                }
-                for i, faq in enumerate(_faqs)
-            ]
+            for g in _faqs:
+                gid = g.get("cluster_id", g.get("group_id", 0))
+                gname = g.get("group_name") or "Other"
+                for f in (g.get("faqs") or []):
+                    if not isinstance(f, dict):
+                        continue
+                    q = (f.get("question") or "").strip()
+                    a = (f.get("answer") or "").strip()
+                    if not q:
+                        continue
+                    rows.append(
+                        {
+                            "cluster_id": gid,
+                            "group_name": gname,
+                            "faq_question": q,
+                            "faq_answer": a,
+                            "mention_count": int(f.get("mention_count", 1) or 1),
+                        }
+                    )
+                    texts.append(q)
 
-            return {"points": points, "count": len(points)}
+            if len(texts) < 2:
+                return {"points": [], "count": 0}
+
+            raw_embs = encode_texts(texts, is_query=False)
+            norm_embs = l2_normalize(raw_embs)
+            coords_3d = _pca_3d(norm_embs)
+
+            points = []
+            for i, r in enumerate(rows):
+                points.append(
+                    {
+                        "x": float(coords_3d[i, 0]),
+                        "y": float(coords_3d[i, 1]),
+                        "z": float(coords_3d[i, 2]),
+                        **r,
+                    }
+                )
+
+            return {"points": points, "count": len(points), "total_groups": len(_faqs)}
 
         except Exception as exc:
             logger.error(f"Visualization data error: {exc}")
@@ -669,10 +673,10 @@ def create_app() -> FastAPI:
             for i in req.indices:
                 _faqs[i]["cluster_id"] = req.new_cluster_id
 
-            # Persist to disk
+            # Persist to disk (canonical format)
             os.makedirs(os.path.dirname(FAQ_OUTPUT_FILE), exist_ok=True)
             with open(FAQ_OUTPUT_FILE, "w", encoding="utf-8") as f:
-                json.dump(_faqs, f, ensure_ascii=False, indent=2)
+                json.dump({"total_groups": len(_faqs), "groups": _faqs}, f, ensure_ascii=False, indent=2)
 
             # Rebuild FAISS index
             from backend.search_index import FAQSearchIndex
@@ -681,7 +685,7 @@ def create_app() -> FastAPI:
             new_index.save()
             _faq_index = new_index
 
-            logger.info(f"Relabeled {len(req.indices)} FAQ(s) to group {req.new_cluster_id}.")
+            logger.info(f"Relabeled {len(req.indices)} group(s) to cluster {req.new_cluster_id}.")
             return {
                 "relabeled": len(req.indices),
                 "new_cluster_id": req.new_cluster_id,
@@ -690,6 +694,152 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"Relabel failed: {e}")
             raise HTTPException(500, f"Failed to save and rebuild FAISS index: {str(e)}")
+
+    @app.post("/faqs/edit", tags=["FAQs"])
+    async def edit_faq(req: EditFAQRequest) -> dict[str, Any]:
+        """Edit the question or answer text of a specific FAQ."""
+        global _faqs, _faq_index
+
+        if not _faqs:
+            raise HTTPException(404, "No FAQs loaded.")
+        if req.index < 0 or req.index >= len(_faqs):
+            raise HTTPException(400, f"Invalid index: {req.index}")
+
+        try:
+            faq = _faqs[req.index]
+            if req.question is not None:
+                faq["faq_question"] = req.question
+                faq["canonical_question"] = req.question
+            if req.answer is not None:
+                faq["faq_answer"] = req.answer
+                faq["canonical_answer"] = req.answer
+                faq["suggested_admin_reply"] = req.answer
+
+            # Persist to disk (canonical format)
+            os.makedirs(os.path.dirname(FAQ_OUTPUT_FILE), exist_ok=True)
+            with open(FAQ_OUTPUT_FILE, "w", encoding="utf-8") as f:
+                json.dump({"total_groups": len(_faqs), "groups": _faqs}, f, ensure_ascii=False, indent=2)
+
+            # Rebuild FAISS index
+            from backend.search_index import FAQSearchIndex
+            new_index = FAQSearchIndex()
+            new_index.build(_faqs)
+            new_index.save()
+            _faq_index = new_index
+
+            return {
+                "message": f"FAQ {req.index} updated successfully.",
+                "faq": faq
+            }
+        except Exception as e:
+            logger.error(f"Edit failed: {e}")
+            raise HTTPException(500, f"Failed to save and rebuild index: {str(e)}")
+
+    @app.post("/faqs/merge-groups", tags=["FAQs"])
+    async def merge_groups(req: MergeGroupsRequest) -> dict[str, Any]:
+        """Merge source group into target: append source's faqs to target, then remove source group."""
+        global _faqs, _faq_index
+
+        if not _faqs:
+            raise HTTPException(404, "No FAQs loaded.")
+
+        try:
+            src_idx = None
+            tgt_idx = None
+            for i, g in enumerate(_faqs):
+                cid = g.get("cluster_id", g.get("group_id", i))
+                if cid == req.source_group_id:
+                    src_idx = i
+                if cid == req.target_group_id:
+                    tgt_idx = i
+            if src_idx is None:
+                raise HTTPException(404, f"Source group {req.source_group_id} not found.")
+            if tgt_idx is None:
+                raise HTTPException(404, f"Target group {req.target_group_id} not found.")
+            if src_idx == tgt_idx:
+                raise HTTPException(400, "Source and target must be different.")
+
+            src_group = _faqs[src_idx]
+            tgt_group = _faqs[tgt_idx]
+            src_faqs = list(src_group.get("faqs", []))
+            tgt_faqs = list(tgt_group.get("faqs", []))
+            tgt_faqs.extend(src_faqs)
+            tgt_group["faqs"] = tgt_faqs
+            tgt_group["total_faqs"] = len(tgt_faqs)
+            tgt_group["support_count"] = tgt_group.get("support_count", 0) + src_group.get("support_count", 0)
+            tgt_group["representative_questions"] = [f.get("question", "") for f in tgt_faqs[:5] if f.get("question")]
+            if not tgt_group["representative_questions"]:
+                tgt_group["representative_questions"] = [tgt_group.get("group_name", "Other")]
+            tgt_group["canonical_question"] = tgt_faqs[0].get("question", "") if tgt_faqs else ""
+            tgt_group["faq_question"] = tgt_group["canonical_question"]
+            tgt_group["canonical_answer"] = tgt_faqs[0].get("answer", "") if tgt_faqs else ""
+            tgt_group["faq_answer"] = tgt_group["canonical_answer"]
+            tgt_group["suggested_admin_reply"] = tgt_group["canonical_answer"]
+
+            remaining = [_faqs[i] for i in range(len(_faqs)) if i != src_idx]
+            for i, g in enumerate(remaining):
+                g["group_id"] = i
+                g["cluster_id"] = i
+            _faqs = remaining
+
+            os.makedirs(os.path.dirname(FAQ_OUTPUT_FILE), exist_ok=True)
+            with open(FAQ_OUTPUT_FILE, "w", encoding="utf-8") as f:
+                json.dump({"total_groups": len(_faqs), "groups": _faqs}, f, ensure_ascii=False, indent=2)
+
+            from backend.search_index import FAQSearchIndex
+            new_index = FAQSearchIndex()
+            new_index.build(_faqs)
+            new_index.save()
+            _faq_index = new_index
+
+            logger.info(f"Merged group {req.source_group_id} into {req.target_group_id}. {len(src_faqs)} FAQs moved.")
+            return {
+                "merged_count": len(src_faqs),
+                "message": f"Successfully merged {len(src_faqs)} FAQs into target group.",
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Merge failed: {e}")
+            raise HTTPException(500, f"Failed to save and rebuild index: {str(e)}")
+
+    @app.get("/export", tags=["Data"])
+    async def export_data(fmt: str = Query("json", description="Export format: json or csv")):
+        """Export all FAQs as JSON or CSV."""
+        if not _faqs:
+            raise HTTPException(404, "No FAQs loaded.")
+        
+        if fmt.lower() == "csv":
+            import io
+            import csv
+            from fastapi.responses import StreamingResponse
+            
+            output = io.StringIO()
+            writer = csv.writer(output)
+            # Write header
+            writer.writerow(["group_id", "group_name", "canonical_question", "canonical_answer", "confidence_score", "support_count"])
+            for f in _faqs:
+                writer.writerow([
+                    f.get("cluster_id", f.get("group_id", "")),
+                    f.get("group_name", ""),
+                    f.get("canonical_question", f.get("faq_question", "")),
+                    f.get("canonical_answer", f.get("faq_answer", "")),
+                    f.get("confidence_score", 1.0),
+                    f.get("support_count", 1)
+                ])
+                
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": "attachment; filename=faqs_export.csv"}
+            )
+        
+        # Default JSON
+        return JSONResponse(
+            content={"total": len(_faqs), "faqs": _faqs},
+            headers={"Content-Disposition": "attachment; filename=faqs_export.json"}
+        )
 
     @app.post("/faqs/delete", tags=["FAQs"])
     async def delete_faqs(req: DeleteFAQsRequest) -> dict[str, Any]:
@@ -712,10 +862,10 @@ def create_app() -> FastAPI:
             indices_set = set(req.indices)
             remaining = [faq for idx, faq in enumerate(_faqs) if idx not in indices_set]
 
-            # Persist to disk (utf-8 for Thai + English)
+            # Persist to disk (canonical format)
             os.makedirs(os.path.dirname(FAQ_OUTPUT_FILE), exist_ok=True)
             with open(FAQ_OUTPUT_FILE, "w", encoding="utf-8") as f:
-                json.dump(remaining, f, ensure_ascii=False, indent=2)
+                json.dump({"total_groups": len(remaining), "groups": remaining}, f, ensure_ascii=False, indent=2)
 
             # Update in-memory state
             _faqs = remaining

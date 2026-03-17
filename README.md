@@ -64,9 +64,9 @@ ollama list
 
 **Quick test — confirm Thai response:**
 ```powershell
-ollama run scb10x/llama3.1-typhoon2-8b-instruct "สรุปในหนึ่งประโยค: ลูกค้าถามว่าโอนเงินยังไง"
+ollama run scb10x/llama3.1-typhoon2-8b-instruct "Summarize in one sentence: the customer asks how to transfer money."
 ```
-Expected: a short Thai response. If you see Thai text → ✅ ready.
+Expected: a short coherent response. If you see a sensible answer → ✅ ready.
 
 ---
 
@@ -116,13 +116,26 @@ Watch the console. You'll see stages progress:
 Stage 1: Loading dataset...      → X records
 Stage 2: Cleaning text...
 Stage 3: Filtering questions...
-Stage 3.5: LLM FAQ extraction... → calls Ollama for each batch
-Stage 4: Embeddings (bge-m3)...  → downloads model first time
-Stage 4.5: UMAP reduction...
+Stage 4: LLM batch extraction... → calls Ollama per micro-batch
+Stage 5: Merging batches...      → dedupe + sum mention_count
+Stage 6: Building search index...→ bge-m3 embeddings + FAISS
+Stage 7: Save & analytics...
 ...
 Pipeline complete! X groups, Y FAQ pairs
-Starting API at http://0.0.0.0:8000
+
+======================================================================
+  FAQ MINING SYSTEM — Server Starting
+======================================================================
+  Status:  starting (after ready → 200 OK)
+  Port:    8000
+  URL:     http://0.0.0.0:8000
+  ------------------------------------------------------------------
+  ➜  Copy & open:  http://localhost:8000
+  ➜  API Docs:     http://localhost:8000/docs
+  ➜  Health:       http://localhost:8000/health  (expect 200 when ready)
+======================================================================
 ```
+Copy the **URL** and paste in your browser. Check **Health** for status code 200 when the server is ready.
 
 ---
 
@@ -141,26 +154,26 @@ $env:LLM_MODEL = "hf.co/scb10x/typhoon-v1.5-8b-instruct-gguf:Q4_K_M"
 python backend/main.py --input data/conversations.json --serve
 ```
 
-Embeddings and UMAP are **cached** — Stage 4 and 4.5 are skipped on repeat runs unless data changes.
+The pipeline uses **LLM per batch** then **merge**; embedding is used only for merging similar questions and for search.
 
 ---
 
 ## How It Works (Pipeline Overview)
 
+Optimized **LLM-centric** flow (no UMAP/HDBSCAN):
+
 ```
 Conversations
-  → Stage 1-3:  Load → Clean → Filter valid Q&A pairs
-  → Stage 3.5:  [LLM] Ollama reads batches of 30 conversations
-                and extracts canonical {question, answer} pairs
-  → Stage 4:    Embed FAQ questions (BAAI/bge-m3, 1024-dim)
-  → Stage 4.5:  UMAP reduction (1024 → 8 dims)
-  → Stage 5:    Deduplicate similar FAQs
-  → Stage 6-7:  HDBSCAN clustering + quality filter
-  → Stage 8:    [LLM] Ollama names each group
-  → Stage 9-10: Assemble groups with full FAQ lists
-  → Stage 11:   Build FAISS semantic search index
-  → Output:     groups[{ group_name, faqs:[{question, answer}] }]
+  → Stage 1–3:  Load → Clean → Filter valid Q&A pairs
+  → Stage 4:    Split data into n_splits; for each split, LLM reads micro-batches
+                and extracts FAQs + assigns group (Thai category name) per batch
+  → Stage 5:    Merge batch results in pairs: same group name → merge;
+                same/similar question → dedupe and sum mention_count
+  → Stage 6:    Build FAISS search index (from group questions)
+  → Stage 7:    Save output + analytics
+  → Output:     groups[{ group_name, faqs:[{ question, answer, mention_count }] }]
 ```
+Group names are **LLM-generated** (e.g. "MT5 login issues"). `mention_count` = how often that FAQ was seen across batches.
 
 ---
 
@@ -171,11 +184,11 @@ Conversations
   "total_groups": 5,
   "groups": [
     {
-      "group_name": "ปัญหาการเข้าระบบ MT5",
+      "group_name": "MT5 login issues",
       "total_faqs": 8,
       "faqs": [
-        { "question": "MT5 เข้าระบบไม่ได้ทำอย่างไร", "answer": "กรุณารีเซ็ตรหัสผ่าน..." },
-        { "question": "ลืมรหัสผ่าน MT5 ทำยังไง",      "answer": "ติดต่อ Support ที่..." }
+        { "question": "I cannot log in to MT5. What should I do?", "answer": "Please reset your password and try again...", "mention_count": 3 },
+        { "question": "How do I reset my MT5 password?", "answer": "Contact support to verify your account, then reset the password...", "mention_count": 1 }
       ]
     }
   ]
@@ -191,14 +204,14 @@ Upload any file with customer questions and admin answers. Column names don't ma
 **JSON:**
 ```json
 [
-  { "customer_message": "MT5 เข้าไม่ได้", "admin_reply": "กรุณารีเซ็ตรหัสผ่าน" }
+  { "customer_message": "I cannot log in to MT5", "admin_reply": "Please reset your password and try again." }
 ]
 ```
 
 **CSV:**
 ```csv
 customer_message,admin_reply
-"MT5 เข้าไม่ได้","กรุณารีเซ็ตรหัสผ่าน"
+"I cannot log in to MT5","Please reset your password and try again."
 ```
 
 **Excel (.xlsx):** Any two columns, map them in the UI.
@@ -214,20 +227,19 @@ customer_message,admin_reply
 | `TOPIC_NAMER_PROVIDER` | `"ollama"` | Change to `"mock"` to skip LLM (for testing only) |
 | `TOPIC_NAMER_MODEL` | `"scb10x/typhoon..."` | **Change to match your `ollama list` output** |
 | `TOPIC_NAMER_OLLAMA_URL` | `"http://localhost:11434/api/generate"` | Default Ollama endpoint |
+| **Env** `OLLAMA_TIMEOUT` | `none` | **No timeout by default (recommended for CPU).** Set to seconds (e.g. `3600`) or `none` |
+| **Env** `OLLAMA_RETRY_COUNT` | `3` | Retries per LLM call on failure |
+| **Env** `OLLAMA_RETRY_DELAY_SEC` | `10` | Seconds to wait between retries |
 
-### FAQ Extraction
-
-| Setting | Default | Description |
-|---|---|---|
-| `FAQ_EXTRACTION_BATCH_SIZE` | `30` | Conversations per LLM call |
-| `FAQ_PER_BATCH` | `8` | Max FAQ pairs extracted per batch |
-| `FAQ_DEDUP_SIMILARITY_THRESHOLD` | `0.90` | Lower = keep more FAQ variants |
-
-### Clustering
+### Batch & Merge (LLM-centric)
 
 | Setting | Default | Description |
 |---|---|---|
-| `CLUSTER_MIN_CLUSTER_SIZE` | `3` | Min FAQs per group (lower for small datasets) |
+| `FAQ_N_SPLITS` | `3` | Number of data splits; each is processed by LLM then results are merged in pairs |
+| `FAQ_EXTRACTION_BATCH_SIZE` | `5` | Conversations per LLM call (micro-batch) |
+| `MERGE_QUESTION_SIMILARITY_THRESHOLD` | `0.88` | When merging: questions with cosine similarity ≥ this are merged (mention_count summed); best answer kept |
+| `MERGE_GROUP_NAME_MIN_SIMILARITY` | `0.7` | When merging: groups with name similarity ≥ this are merged |
+| `MERGE_GROUP_USE_EMBEDDING` | `True` | Match group names by embedding (more accurate for Thai); fallback to string similarity |
 
 ---
 
@@ -238,8 +250,9 @@ customer_message,admin_reply
 | `ollama: not recognized` | Ollama not installed or PowerShell not restarted | Close & reopen PowerShell after install |
 | `"No FAQ pairs extracted"` | Ollama not running / model not pulled | Run `ollama list` to confirm model exists |
 | Ollama running but no response | Model name wrong in config | Run `ollama list`, copy exact name to `LLM_MODEL` |
-| Pipeline very slow | LLM calls take time | Normal — Stage 3.5 calls Ollama per batch; increase `FAQ_EXTRACTION_BATCH_SIZE` |
-| Too few groups | Dataset too small or `CLUSTER_MIN_CLUSTER_SIZE` too high | Lower `CLUSTER_MIN_CLUSTER_SIZE` to 2 |
+| Pipeline very slow | LLM on CPU takes time | Normal — no timeout by default; retries 3x on failure. Optionally set `OLLAMA_TIMEOUT=3600` if you want a limit |
+| Timeout / connection error | Previously default 10800s could still fail on slow CPU | Default is now **no timeout** (`OLLAMA_TIMEOUT=none`). System retries automatically |
+| Too few groups | Dataset too small | Lower thresholds in config or add more data |
 | bge-m3 download slow | First run only | 2.2 GB download, cached after first run |
 
 ---
@@ -255,15 +268,11 @@ context_extract/
 │   ├── data_loader.py         ← Stage 1: Load files
 │   ├── text_cleaner.py        ← Stage 2: Clean text
 │   ├── question_filter.py     ← Stage 3: Filter Q&A
-│   ├── llm_extractor.py       ← Stage 3.5: LLM batch extraction [NEW]
+│   ├── batch_extractor.py     ← Stage 4: LLM batch extraction + groups
+│   ├── batch_merger.py        ← Stage 5: Merge batches (embedding + best answer)
 │   ├── embedding_service.py   ← Stage 4: bge-m3 (1024-dim)
-│   ├── umap_reducer.py        ← Stage 4.5: UMAP reduction [NEW]
-│   ├── deduplication.py       ← Stage 5: Dedup
-│   ├── clustering.py          ← Stage 6-7: HDBSCAN
-│   ├── topic_namer.py         ← Stage 8: LLM group naming [NEW]
-│   ├── faq_generator.py       ← Stage 9-10: Assemble output
-│   ├── search_index.py        ← Stage 11: FAISS
-│   └── analytics.py           ← Stage 13: Reports
+│   ├── search_index.py        ← Stage 6: FAISS
+│   └── analytics.py           ← Reports
 ├── frontend/
 │   ├── index.html             ← Single-page app UI
 │   ├── manual.html            ← User manual (this guide in Thai)
@@ -326,3 +335,5 @@ docker run -d -p 8000:8000 -v faq_data:/app/data `
 ```
 
 > Ollama must run on the **host machine**. Use `host.docker.internal` instead of `localhost`.
+>
+> The container starts the **API server only**. Open `http://localhost:8000`, upload your file, then click **Start Analysis** (or call `POST /run-pipeline`).

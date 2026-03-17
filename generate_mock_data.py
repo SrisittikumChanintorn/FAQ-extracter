@@ -1,170 +1,207 @@
 import json
 import os
 import random
+from datetime import datetime
 
-# 10 Topics, each with 25 distinct scenarios
-# Each scenario will have 2 variations to ensure clustering (min_cluster_size=2)
-# Total records: 10 topics * 25 scenarios * 2 variations = 500 records
+"""
+generate_mock_data.py
+
+Generates realistic mock customer/admin Q&A pairs for business/finance/investment support.
+Output: data/conversations.json
+
+Design goals:
+- Thai as primary language with natural English investment jargon mixed in.
+- Diverse intents and phrasings (not repetitive templates).
+- Investment/business/finance only.
+"""
 
 SCENARIOS = {
-    "login_locked": [
-        "ลืมรหัสผ่าน เข้าแอปไม่ได้", "รหัสโดนล็อคเพราะใส่ผิดเกิน 3 ครั้ง", "ขอปลดล็อค Account ชั่วคราว",
-        "ไม่ได้รับรหัส OTP ตอนล็อคอิน", "เข้าสู่ระบบด้วยลายนิ้วมือไม่ได้", "เปลี่ยนเครื่องใหม่แล้วล็อคอินไม่ได้",
-        "PIN ซื้อขายโดนอายัดต้องทำยังไง", "แอปแจ้งว่า User ID หมดอายุ", "เข้าหน้าเว็บไม่ได้ ขึ้นหน้าขาว",
-        "ชื่อผู้ใช้งาน (Username) คืออะไร ลืมแล้ว", "โดนระงับบัญชีเพราะไม่ได้ใช้งานนาน", "ล็อคอินแล้วแอปเด้งออกทันที",
-        "ต้องการรีเซ็ตรหัสผ่านผ่านอีเมล", "เข้าใช้งานจากต่างประเทศไม่ได้", "เปลี่ยนรหัสผ่านแล้วแต่ยังใช้ตัวเก่าเข้าได้",
-        "ระบบแจ้งว่ามีการเข้าสู่ระบบซ้อน", "สแกนใบหน้าไม่ผ่านหลายครั้ง", "ขอยกเลิกการล็อคบัญชีด่วน",
-        "จำรหัสเข้าพอร์ตไม่ได้เลยค่ะ", "ใส่พาสเวิร์ดถูกแต่ระบบบอกว่าผิด", "เบอร์โทรที่รับ OTP เปลี่ยนไปแล้ว",
-        "เข้าแอป Streaming ด้วยบัญชีเฟซบุ๊กไม่ได้", "หน้าจอล็อคอินค้างทำยังไง", "ขอวิธีตั้งค่ารหัสผ่านใหม่",
-        "รหัสผ่านต้องมีอักขระพิเศษไหม"
+    "options": [
+        "Option คืออะไร มือใหม่ขอพื้นฐานหน่อยครับ",
+        "Call vs Put ต่างกันยังไงครับ",
+        "Premium ของ Option คิดจากอะไร (IV, time value) ?",
+        "Theta decay คืออะไร ทำไมใกล้หมดอายุแล้ว premium ไหลเร็ว",
+        "Delta / Gamma / Vega ต้องดูยังไงในการเทรด Options",
+        "ITM / ATM / OTM ต่างกันยังไง เลือก strike ยังไงดี",
+        "อยากทำ covered call ต้องถือหุ้นก่อนใช่ไหม",
+        "Short option ต้องวาง margin เท่าไหร่ และเสี่ยงอะไรบ้าง",
+        "Exercise/Assignment คืออะไร เกิดตอนไหน",
+        "ทำไมบางซีรีส์ bid/ask กว้างและสภาพคล่องต่ำ",
+        "อยาก hedging พอร์ตด้วย Put ต้องเริ่มยังไง",
+        "Long straddle/strangle เหมาะกับช่วงข่าวแรง ๆ ใช่ไหม",
+        "Option chain ดูตรงไหน มี Greeks/IV แสดงไหม",
+        "Set50 Options หมดอายุวันไหน และมี roll ได้ไหม",
+        "ถ้าถือ option จน expire จะเกิดอะไรขึ้น (auto expire/settlement)",
     ],
-    "option_details": [
-        "Option คืออะไร พื้นฐานเลยครับ", "Call Option กับ Put Option ต่างกันยังไง", "ขอรายชื่อซีรีส์ Option ที่เปิดเทรดตอนนี้",
-        "ราคา Premium ของ Option คิดจากอะไร", "วิธีการใช้สิทธิทำการ Exercise Option", "วันหมดอายุของ SET50 Options คือวันไหน",
-        "ตัวคูณสัญญาของ Options คือเท่าไหร่", "ทำไมค่า Premium ถึงลดลงตามเวลา (Time Decay)", "In-the-money (ITM) คืออะไร",
-        "Out-of-the-money (OTM) คืออะไร", "การขาย Option (Short Option) ต้องมีหลักประกันเท่าไหร่", "สอนอ่านตาราง Option Chain หน่อยค่ะ",
-        "Index Options ต่างจาก Stock Options ยังไง", "ความเสี่ยงสูงสุดของการซื้อ Option คืออะไร", "กลยุทธ Long Straddle ใช้ตอนไหน",
-        "Delta ของ Option บอกอะไรเรา", "Theta คืออะไรในทาง Options", "หากถือ Option จนหมดอายุจะเกิดอะไรขึ้น",
-        "กำไรขาดทุนของ Options คำวณยังไง", "อยากเทรด Options ต้องเปิดพอร์ตประเภทไหน", "ซื้อ Call Option ไว้ ถ้าดัชนีขึ้นจะได้กำไรไหม",
-        "Volatility มีผลต่อราคา Option ยังไง", "ขอขั้นตอนการส่งคำสั่งซื้อขาย Options", "ทำไมราคา Option บางซีรีส์ไม่มีสภาพคล่อง",
-        "Strike Price คืออะไร เลือกยังไงดี"
+    "futures_tfex": [
+        "Futures คืออะไร ต่างจากหุ้นยังไงครับ",
+        "Initial margin / Maintenance margin คืออะไร",
+        "โดน margin call ต้องเติมเงินภายในกี่โมง",
+        "Mark to Market คืออะไร ทำไมยอดเงินเปลี่ยนทุกวัน",
+        "Leverage ใน TFEX ประมาณกี่เท่า และควรคุม risk ยังไง",
+        "Long/Short เปิดสถานะยังไง และปิดทำกำไรทำยังไง",
+        "Force sell/forced close เกิดจากอะไร ป้องกันยังไง",
+        "Series ของสัญญา (H/M/U/Z) ดูยังไงว่าใกล้หมดอายุ",
+        "Roll over คืออะไร ทำในวันไหนถึงจะเหมาะ",
+        "Gold Futures vs Gold Online ต่างกันตรงไหน",
+        "USD Futures ใช้ hedge ค่าเงินได้ยังไงแบบ practical",
+        "ค่าธรรมเนียม TFEX ต่อสัญญา + ค่าธรรมเนียมตลาดประมาณเท่าไหร่",
+        "Bid/Offer ในกระดาน futures บางทีหาย เกิดจากอะไร",
     ],
-    "future_details": [
-        "Futures คือสัญญาอะไรครับ", "วางเงินประกันขั้นต่ำ TFEX เท่าไหร่", "Maintenance Margin คืออะไร",
-        "โดน Force Sell ในพอร์ตฟิวเจอร์สคืออะไร", "สัญญา Gold Online Futures (GO) ต่างจาก Gold Futures ยังไง", "Block Trade คืออะไร มีขั้นต่ำไหม",
-        "Contract Size ของ Single Stock Futures", "การคำนวณ Mark to Market ทำทุกวันไหม", "Series ของฟิวเจอร์สดูตรงไหนว่าหมดอายุ",
-        "การ Roll over สัญญาทำยังไง", "ค่าธรรมเนียมเทรด TFEX ต่อสัญญาเท่าไหร่", "ตลาด TFEX เปิดปิดกี่โมง",
-        "ฟิวเจอร์สมีเงินปันผลเหมือนหุ้นไหม", "ทำไมยอดเงินประกันถึงเพิ่มขึ้นเอง", "Leverage ในฟิวเจอร์สคืออะไร",
-        "การวางเงินหลักประกันแบบ Net Settlement", "ประกาศปรับวงเงินประกันเช็คได้ที่ไหน", "เทรด USD Futures ป้องกันความเสี่ยงยังไง",
-        "ทำไมสถานะโดนปิดอัตโนมัติ", "Margin Call คือต้องเติมเงินเท่าไหร่", "สัญลักษณ์หุ้นรายตัวใน TFEX คืออะไร",
-        "Long กับ Short ในฟิวเจอร์สคืออะไร", "วันเบี้ยปรับคืออะไรถ้าไม่เติมเงิน", "ฟิวเจอร์สอ้างอิงกับดัชนีอะไรบ้าง",
-        "ขอวิธีดูราคา Bid/Ask ในหน้าฟิวเจอร์ส"
+    "stocks_fundamentals": [
+        "XD คืออะไร ถ้าซื้อก่อน XD 1 วัน ยังได้ปันผลไหม",
+        "Dividend yield ดูยังไง และต่างจาก payout ratio ไหม",
+        "P/E สูงแปลว่าแพงเสมอไหม ต้องเทียบ growth ยังไง",
+        "P/BV สำหรับหุ้นแบงก์ควรดูยังไง",
+        "EPS diluted vs basic ต่างกันไหม",
+        "Market cap คำนวณยังไง และ free float สำคัญแค่ไหน",
+        "Cash balance / marginable / short selling เช็คตรงไหน",
+        "SP/NP คืออะไร กระทบการซื้อขายยังไง",
+        "NVDR คืออะไร เหมาะกับต่างชาติหรือคนไทยก็ใช้ได้",
+        "RO/Right offering คืออะไร ถ้าไม่ใช้สิทธิ์จะเป็นยังไง",
+        "Warrant / DW ต่างกันยังไง และมี time decay ไหม",
+        "งบการเงินดูเบื้องต้นต้องเริ่มจากงบไหน (IS/BS/CF)",
+        "ทำไมราคาหุ้นชน ceiling/floor แล้วซื้อไม่ได้",
     ],
-    "stock_details": [
-        "หุ้น PTT ปันผลวันไหน", "XD คืออะไร ถ้าซื้อวันนี้ได้ปันผลไหม", "ขอรายชื่อหุ้นใน SET50 ปีนี้",
-        "ราคาเป้าหมายของหุ้นกลุ่มแบงก์", "ค่า P/E Ratio บอกอะไรนักลงทุน", "Market Cap ของหุ้นคำวณยังไง",
-        "หุ้นตัวนี้ติด Cash Balance หรือเปล่า", "ทำไมราคาวันนี้ถึง Floor", "Ceiling ของหุ้นคิดจากราคาไหน",
-        "สิทธิในการจองซื้อหุ้นเพิ่มทุน (RO)", "Warrant คืออะไร แปลงสภาพยังไง", "หุ้นปันผลฟรีคืออะไร",
-        "การอ่านงบการเงินเบื้องต้น", "Free Float ของหุ้นมีผลยังไง", "หุ้น IPO ตัวใหม่จะเข้าตลาดเมื่อไหร่",
-        "อยากทราบรายชื่อผู้ถือหุ้นรายใหญ่", "ธุรกิจของหุ้นตัวนี้ทำเกี่ยวกับอะไร", "ค่า Beta ของหุ้นบอกความเสี่ยงยังไง",
-        "หุ้นเติบโต (Growth Stock) กับหุ้นคุณค่า (Value Stock)", "การแตกพาร์ (Stock Split) มีผลต่อพอร์ตยังไง", "เช็คราคาหุ้นย้อนหลังได้ที่ไหน",
-        "หุ้นกลุ่มอสังหาฯ ช่วงนี้น่าสนใจไหม", "ทำไมหุ้นตัวนี้โดน SP", "การซื้อหุ้นแบบ NVDR คืออะไร",
-        "ทุนจดทะเบียนของบริษัทดูตรงไหน"
+    "portfolio_strategy": [
+        "DCA คืออะไร เหมาะกับหุ้นหรือกองทุนมากกว่ากัน",
+        "Asset allocation ทำยังไงให้เหมาะกับความเสี่ยง (risk profile)",
+        "Stop loss ควรตั้งกี่ % และต้องดู volatility ไหม",
+        "Take profit vs trailing stop ใช้ต่างกันยังไง",
+        "Value investing vs growth investing ต่างกันยังไง",
+        "Technical analysis เริ่มจาก indicator อะไรดี (MA/RSI/MACD)",
+        "Money management คืออะไร ควร risk per trade กี่ %",
+        "Bear market ควรจัดพอร์ตยังไง (defensive, cash, hedge)",
+        "Backtest กลยุทธ์ทำยังไงให้ไม่ bias (lookahead/overfit)",
+        "Margin of safety คืออะไร และคำนวณแบบง่าย ๆ ได้ไหม",
+        "Hedging คืออะไร ใช้ futures/options ป้องกันพอร์ตได้จริงไหม",
     ],
-    "platform_usage": [
-        "วิธีตั้งค่า RSI ใน Streaming", "หน้าจอ efin Smart Portal ใช้งานยังไง", "MT4 สำหรับเทรดหุ้นมีไหม",
-        "วิธีดูกราฟใน TradingView ผ่านแอป", "การตั้ง Stop Order ใน Streaming", "วิธีเปิดใช้งาน Biometric ในแอป",
-        "เปลี่ยนสีพื้นหลังกราฟใน efin", "แอป Streaming PC กับ Mobile ต่างกันไหม", "การจัดหน้า Dashboard ใน MT5",
-        "วิธีดาวน์โหลดติดตั้งโปรแกรมเทรด", "การใช้เทคนิคัลเบื้องต้นบนแพลตฟอร์ม", "จะดูพอร์ตจำลอง (Click2Win) ตรงไหน",
-        "วิธีดึงข้อมูลราคาหุ้นเข้า Excel", "การตั้งค่า Alert แจ้งเตือนราคา", "เมนู Research ในแอปอยู่ตรงไหน",
-        "วิธีดูประวัติการซื้อขายย้อนหลัง", "เชื่อมต่อ TradingView กับบัญชีเทรด", "วิธีเปลี่ยนภาษาในโปรแกรมเทรด",
-        "การส่งคำสั่งแแบบรวดเร็ว (Quick Order)", "วิธีดูตารางหลักประกันในแอป", "ตั้งค่ากราฟให้จำ Template ยังไง",
-        "ลบ Indicators ที่ไม่ต้องการออกยังไง", "หน้าจอ Buy/Sell บน MetaTrader หายไป", "วิธีเช็คยอดเงินในพอร์ตผ่านแอป",
-        "การสลับพอร์ตหุ้นและอนุพันธ์ในแอปเดียว"
+    "trading_platform": [
+        "ตั้ง Stop order / Stop limit ในแอปเทรดยังไงครับ",
+        "ตั้ง alert แจ้งเตือนราคา/volume ในแอปได้ไหม",
+        "ดูกราฟแบบ candlestick แล้วเพิ่ม RSI/MACD ยังไง",
+        "ดู Bid/Offer (Level 2) ได้จากเมนูไหน",
+        "ประวัติการซื้อขายย้อนหลัง/statement export ทำยังไง",
+        "ส่งคำสั่งแล้วขึ้น Rejected ต้องเช็คอะไรบ้าง (cash, buying power, circuit breaker)",
+        "ดูพอร์ตหุ้น vs พอร์ต TFEX สลับยังไงในหน้าเดียว",
+        "ตั้งค่า default order size และ validity (DAY/IOC) ได้ไหม",
     ],
-    "contact_admin": [
-        "ขอเปลี่ยนที่อยู่จัดส่งเอกสาร", "ต้องการขอเอกสาร 50 ทวิ", "แจ้งโอนเงินเข้าพอร์ตครับ",
-        "ขอสเตทเมนท์ย้อนหลัง 6 เดือน", "ต้องการเปิดบัญชีเพิ่ม ทำไงครับ", "ขอแบบฟอร์มแก้ไขข้อมูลส่วนตัว",
-        "อัปเดตเบอร์โทรศัพท์มือถือใหม่", "ยกเลิกบริการหักบัญชีอัตโนมัติ (ATS)", "สอบถามสถานะการถอนเงิน",
-        "ส่งเอกสารเปิดพอร์ตทางไปรษณีย์แล้ว", "ขอมอบอำนาจให้คนอื่นทำธุระแทน", "ขอรับใบหุ้นเป็นตัวจริง",
-        "แจ้งเปลี่ยนบัญชีรับเงินปันผล", "ต้องการสอบถามค่าธรรมเนียมการโอนหุ้น", "ตรวจสอบยอดค้างชำระในบัญชีเครดิต",
-        "ขอรหัสผ่านสำรองสำหรับการเทรดทางโทรศัพท์", "สอบถามชื่อผู้จัดการกองทุนหรือ Marketing", "ขอความช่วยเหลือเรื่องเอกสารภาษี",
-        "แจ้งเรื่องสมุดบัญชีธนาคารหาย", "ต้องการสอบถามข้อมูลสาขาที่ใกล้ที่สุด", "ขอยกเลิกพอร์ตการลงทุน",
-        "ขอใบยืนยันรายการซื้อขายหลักทรัพย์", "สอบถามเรื่องการโอนหุ้นระหว่างสมาชิก", "ต้องการสมัครรับบทวิเคราะห์ทางอีเมล",
-        "สอบถามเวลาทำการของสำนักงานใหญ่"
-    ],
-    "platform_issues": [
-        "แอป Streaming ค้างหน้าโหลด", "ส่งคำสั่งแล้วขึ้น Error: Rejected", "กราฟใน efin ไม่ขยับเลยครับ",
-        "ล็อคอิน MT5 แล้วขึ้น No Connection", "ยอดเงินในพอร์ตไม่อัปเดต", "หน้าจอขาวตอนเข้าเมนูเทรด",
-        "ทำไมเข้าใช้งานผ่าน Wi-Fi ไม่ได้", "แอปแจ้งเตือนว่าเวอร์ชันเก่าเกินไป", "กดปุ่มคอนเฟิร์มแล้วไม่มีอะไรเกิดขึ้น",
-        "ระบบล่มหรือเปล่าครับวันนี้", "ทำไมราคา Bit/Offer ไม่ตรงกับหน้าตลาด", "ประวัติการเทรดหายไปบางรายการ",
-        "แอปบังคับปิด (Force Close) ตลอด", "คีย์ชื่อหุ้นแล้วหาไม่เจอ", "หน้าจอ Buy/Sell ค้าง",
-        "ข้อมูลพอร์ตจำลองไม่ตรงกับพอร์ตจริง", "ระบบแจ้งว่า Session Expired บ่อยมาก", "ไอคอนแอปหายไปจากหน้าจอ",
-        "ทำไมตั้ง Stop Loss แล้วไม่ทำงาน", "เสียงแจ้งเตือนราคาไม่ดัง", "หน้าจอกราฟกระพริบตลอด",
-        "โหลดหน้ารายงานนานมาก", "มีข้อความ Error รหัส XXX", "แอปไม่รองรับ iOS/Android รุ่นนี้",
-        "อินเทอร์เน็ตปกติแต่แอปบอกว่าออฟไลน์"
-    ],
-    "interest_products": [
-        "สนใจเข้ากลุ่ม Line Signal", "ขอดูผลงานบอทเทรดย้อนหลัง", "สนใจร่วมกิจกรรมสัมมนาฟรี",
-        "มีบริการ Copy Trade ไหมครับ", "ขอรายละเอียดระบบ Robot Trade", "สนใจสมัครสมาชิกรายปี",
-        "มีโปรโมชั่นลูกค้าใหม่ไหม", "อยากได้เครื่องมือสแกนหุ้นอัตโนมัติ", "ขอวิธีใช้งาน Expert Advisor (EA)",
-        "สอบถามเงื่อนไขการรับ Signal ฟรี", "สนใจซื้อคอร์สเรียนเทรดออนไลน์", "กิจกรรมแข่งเทรดมีเมื่อไหร่",
-        "ขอดูรีวิวจากผู้ใช้บริการบอท", "มีบริการจัดการพอร์ตแบบส่วนตัวไหม", "สนใจระบบ AI ช่วยเทรด",
-        "ขอรายละเอียดกลุ่มวีไอพี", "อยากสมัครเป็นตัวแทนนำเสนอโปรดักส์", "สนใจเทรดทองแบบมีซิกแนล",
-        "มีระบบออโต้เทรดสำหรับ Option ไหม", "ขอรายชื่อวิทยากรในงานสัมมนา", "อยากร่วมทดสอบระบบบอทตัวใหม่",
-        "ขอรับสิทธิ์เข้าใช้งานโปรแกรมสแกนฟรี", "แจ้งปัญหาการใช้งานกลุ่ม Telegram Signal", "สนใจสมุดบันทึกการเทรด (Trading Log)",
-        "สอบถามยอดเทรดสะสมเพื่อรับของรางวัล"
-    ],
-    "messenger": [
-        "เรียกแมสเซนเจอร์มารับเอกสารที่บ้าน", "พื้นที่ให้บริการ Messenger มีที่ไหนบ้าง", "มีค่าใช้จ่ายเรียกเมสเซนเจอร์ไหม",
-        "แมสเซนเจอร์สามารถส่งเอกสารมอบอำนาจได้ไหม", "รอแมสเซนเจอร์นานมากแล้วยังไม่มา", "ต้องการนัดหมาย Messenger ล่วงหน้า",
-        "Messenger จะถึงที่หมายประมาณกี่โมง", "เบอร์โทรติดต่อแมสเซนเจอร์เบอร์อะไร", "Messenger รับเช็คเงินสดไหม",
-        "ขอเปลี่ยนที่อยู่จุดนัดรับเอกสาร", "Messenger นำเอกสารไปส่งที่ไหน", "ต้องเตรียมเอกสารอะไรให้แมสเซนเจอร์บ้าง",
-        "ใบตอบรับแมสเซนเจอร์ต้องเซ็นตรงไหน", "Messenger จะโทรแจ้งก่อนถึงไหม", "ขอยกเลิกนัดเมสเซนเจอร์วันนี้",
-        "บริการ Messenger มีให้ทุกวันไหม", "แมสเซนเจอร์สามารถรอรับเอกสารกลับได้ไหม", "เอกสารหายระหว่างทางทำยังไง",
-        "Messenger ใส่ชุดยูนิฟอร์มบริษัทไหม", "ฝากเอกสารไว้ที่ลอบบี้ให้ Messenger รับได้ไหม", "แมสเซนเจอร์ไปรับเอกสารที่ธนาคารได้ไหม",
-        "ขอเลื่อนเวลานัดรับเอกสาร", " Messenger พื้นที่ต่างจังหวัดมีไหม", "สอบถามสถานะการขนส่งเอกสาร",
-        "ได้รับการยืนยันการรับเอกสารหรือยัง"
-    ],
-    "investment_strategy": [
-        "DCA คืออะไร อธิบายหน่อยครับ", "กลยุทธ์ Value Investing เหมาะกับใคร", "มือใหม่ควรเริ่มลงทุนยังไง",
-        "การทำ Asset Allocation คืออะไร", "Technical Analysis เบื้องต้น", "Fundamental Analysis คืออะไร",
-        "การบริหารความพอร์ตด้วย Money Management", "Stop Loss กับ Take Profit คืออะไร", "ความแตกต่างของ Day Trade กับ VI",
-        "จัดพอร์ตแบบกระจายความเสี่ยง", "ลงทุนในหุ้นเติบโตคัดกรองยังยังไง", "การใช้ Trailing Stop ในการรันเทรนด์",
-        "จิตวิทยาการลงทุน (Trading Psychology)", "การอ่านกราฟแท่งเทียนบอกอะไรเรา", "RSI Oversold/Overbought คืออะไร",
-        "แนวรับแนวต้าน (Support & Resistance) หาได้ยังไง", "ลงทุนในกองทุนรวมต่างจากหุ้นยังไง", "เป้าหมายการวางแผนการเงินระยะยาว",
-        "เงินปันผลกับส่วนต่างกำไรราคาหุ้น", "การเลือกหุ้นจากแนวโน้มอุตสาหกรรม", "ลงทุนแบบเน้นความปลอดภัย (Defensive)",
-        "Margin of Safety คืออะไร", "การทำ Backtest กลยุทธ์เพื่อดูความแม่นยำ", "วิธีรับมือกับตลาดหมี (Bear Market)",
-        "หัวใจสำคัญของการเป็นเทรดเดอร์อาชีพ"
-    ]
 }
 
-ANSWERS = {
-    "login_locked": "เรียนคุณลูกค้า หากบัญชีล็อค รบกวนแจ้งชื่อ-นามสกุล และเลขที่บัญชี เพื่อให้แอดมินดำเนินการปลดล็อค หรือติดต่อ 02-XXX-XXXX ครับ",
-    "option_details": "Options คือสิทธิในการซื้อขายสินทรัพย์ตามราคาที่กำหนด แนะนำศึกษาเพิ่มเติมที่เมนูคู่มือการลงทุน หรือสอบถามมาร์เก็ตติ้งส่วนตัวค่ะ",
-    "future_details": "สัญญาฟิวเจอร์สต้องวางเงินประกัน (Margin) ตามที่ตลาดกำหนด หากหลักประกันต่ำกว่าเกณฑ์จะมีการแจ้งเตือน Margin Call ครับ",
-    "stock_details": "ข้อมูลรายละเอียดหุ้น งบการเงิน และเงินปันผล สามารถตรวจสอบได้ผ่านแอป Streaming หรือเว็บไซต์ของตลาดหลักทรัพย์ครับ",
-    "platform_usage": "สำหรับการใช้งานแพลตฟอร์มต่างๆ ทางเรามีคลิปวิดีโอสอนและคู่มือ PDF จัดส่งให้ทางอีเมลเมื่อเปิดบัญชีครับ",
-    "contact_admin": "คุณลูกค้าสามารถดำเนินการเรื่องเอกสารต่างๆ ได้ผ่านแอป e-Service หรือแจ้งแอดมินเพื่อขอแบบฟอร์มได้โดยตรงค่ะ",
-    "platform_issues": "ขออภัยในความไม่สะดวกครับ ขณะนี้มีการอัปเดตระบบชั่วคราว แนะนำให้ลอง Clear Cache หรือเข้าใช้งานใหม่อีกครั้งครับ",
-    "interest_products": "สนใจผลิตภัณฑ์หรือบริการของเรา สามารถลงทะเบียนผ่านหน้าเว็บ หรือทักแชทสอบถามรายละเอียดโปรโมชั่นปัจจุบันได้เลยค่ะ",
-    "messenger": "เรามีบริการ Messenger รับส่งเอกสารเฉพาะพื้นที่กรุงเทพฯ และปริมณฑลฟรี กรุณาแจ้งที่อยู่และเบอร์ติดต่อเพื่อแอดมินนัดคิวครับ",
-    "investment_strategy": "การลงทุนมีความเสี่ยง แนะนำให้ศึกษาพื้นฐานและวางกลยุทธ์ DCA หรือตั้งจุดตัดขาดทุน SL ให้สอดคล้องกับระดับความเสี่ยงที่รับได้ครับ"
+OPENERS = [
+    "สวัสดีครับ", "สวัสดีค่ะ", "ขอสอบถามครับ", "รบกวนสอบถามหน่อยครับ", "สอบถามหน่อยค่ะ", "ขอถามนิดนึงครับ"
+]
+
+CLOSERS = [
+    "ครับ", "ค่ะ", "ขอบคุณครับ", "ขอบคุณค่ะ", "รบกวนด้วยครับ", "ช่วยแนะนำหน่อยค่ะ"
+]
+
+def _pick(xs):
+    return random.choice(xs)
+
+def _mix_jargon(text: str) -> str:
+    """Lightly mixes natural English jargon into Thai phrasing."""
+    additions = [
+        "แบบ practical", "แบบ step-by-step", "ใน app", "ในระบบ", "ในพอร์ต", "เชิง risk management",
+        "เรื่อง liquidity", "เรื่อง slippage", "เช็คใน statement", "ดูใน order book",
+    ]
+    if random.random() < 0.35:
+        return f"{text} {_pick(additions)}"
+    return text
+
+ANSWER_BANK = {
+    "options": [
+        "Options คือสัญญาที่ให้ “สิทธิ” (ไม่ใช่ข้อบังคับ) ในการซื้อ/ขายสินทรัพย์อ้างอิงที่ราคา Strike ภายในเวลาที่กำหนด โดยราคาที่จ่ายเรียกว่า Premium ครับ",
+        "Premium ของ option จะขึ้นกับหลายปัจจัย เช่น ราคาอ้างอิง, Strike, เวลา (time to expiry), และ Implied Volatility (IV) ค่ะ",
+        "Greeks (Delta/Gamma/Vega/Theta) ใช้ประเมินความไวของราคา option ต่อการเปลี่ยนแปลงของราคาอ้างอิง เวลา และ volatility ครับ",
+        "การ short option มีความเสี่ยงสูงและต้องวางหลักประกัน (margin) ตามเกณฑ์ตลาด/โบรกเกอร์ แนะนำให้เริ่มจากความเข้าใจ payoff และคุม position size ค่ะ",
+        "ถ้าถือ option จนหมดอายุ (expiry) แล้วเป็น OTM มักจะหมดค่าทันที ส่วน ITM จะมีขั้นตอน settlement/assignment ตามเงื่อนไขของสัญญา ครับ",
+    ],
+    "futures_tfex": [
+        "Futures เป็นสัญญาซื้อ/ขายล่วงหน้าที่มีการวางหลักประกัน (margin) และมีการ Mark-to-Market รายวัน ทำให้กำไร/ขาดทุนสะท้อนในบัญชีทุกวันครับ",
+        "Initial margin คือเงินประกันเริ่มต้น ส่วน Maintenance margin คือระดับขั้นต่ำ ถ้าต่ำกว่าเกณฑ์จะเกิด Margin Call และต้องเติมเงินเพิ่มค่ะ",
+        "การ roll over คือการปิดสัญญาเดิมแล้วเปิดสัญญา series ใหม่ เพื่อเลี่ยงความเสี่ยงช่วงใกล้หมดอายุ/สภาพคล่องลดลงครับ",
+        "Long คือคาดว่าราคาเพิ่มขึ้น, Short คือคาดว่าราคาลดลง ควรกำหนด stop loss และจำกัดความเสี่ยงต่อครั้งให้ชัดเจนค่ะ",
+    ],
+    "stocks_fundamentals": [
+        "XD คือวันที่ขึ้นเครื่องหมายไม่รับสิทธิปันผล/สิทธิอื่น ๆ โดยหลักแล้วต้องซื้อให้ทันตามเงื่อนไขวันกำหนดรายชื่อผู้ถือหุ้น (Record date) ครับ",
+        "P/E ต้องดูร่วมกับ growth และคุณภาพกำไร (earnings quality) ไม่ได้แปลว่าแพง/ถูกแบบตายตัวค่ะ",
+        "Cash balance, short selling, และสถานะหลักประกัน มักตรวจสอบได้จากประกาศตลาดหรือเมนูข้อมูลหลักทรัพย์ในแอปเทรดครับ",
+        "RO/Warrant/DW มีเงื่อนไขและความเสี่ยงต่างกัน โดยเฉพาะ DW/Option-like products มักมี time decay และ sensitivity ต่อ IV ค่ะ",
+    ],
+    "portfolio_strategy": [
+        "DCA คือการทยอยลงทุนเป็นงวด ๆ เพื่อลดความเสี่ยงจากการเข้าซื้อผิดจังหวะ เหมาะกับการลงทุนระยะยาวและสินทรัพย์ที่มีความผันผวนครับ",
+        "Asset allocation คือการกระจายสัดส่วนสินทรัพย์ (หุ้น/ตราสารหนี้/ทอง/เงินสด) ให้สอดคล้องกับเป้าหมายและระดับความเสี่ยงที่รับได้ค่ะ",
+        "Stop loss ควรกำหนดจากระดับความเสี่ยงต่อครั้ง (risk per trade) และ volatility ไม่ใช่ตั้งแบบสุ่ม ๆ ครับ",
+        "Backtest ควรระวัง lookahead bias, survivorship bias และ overfitting โดยใช้ข้อมูลนอกตัวอย่าง (out-of-sample) ตรวจสอบค่ะ",
+    ],
+    "trading_platform": [
+        "หากส่งคำสั่งแล้วถูก Rejected ให้ตรวจสอบ buying power/วงเงิน, ประเภทคำสั่ง (เช่น IOC/DAY), และเงื่อนไขราคา (ceiling/floor) ครับ",
+        "การตั้ง Stop order/Stop limit ทำได้จากหน้าส่งคำสั่ง โดยเลือกประเภทคำสั่งเป็น Stop และกำหนด trigger price ตามต้องการค่ะ",
+        "Indicator เช่น RSI/MACD เพิ่มได้จากเมนู Indicators ในหน้ากราฟ และสามารถบันทึกเป็น template ได้ครับ",
+        "สามารถดู Bid/Offer และ depth (ถ้ามีสิทธิ์ข้อมูล) ได้ในหน้า order book หรือหน้ารายละเอียดหลักทรัพย์ค่ะ",
+    ],
 }
 
 def generate_variations(q_text, a_text, topic_id, scenario_idx):
-    """Generate 2 variations of a Q&A pair."""
-    variations = []
-    
-    # Variation 1: Normal polite
-    q1 = f"สวัสดีครับ {q_text} ครับ"
-    a1 = f"เรียนลูกค้า {a_text}"
-    
-    # Variation 2: Brief/Informal
-    q2 = f"รบกวนถามหน่อย {q_text} ต้องทำไง"
-    a2 = f"สวัสดีค่ะ {a_text}"
-    
-    variations.append({"customer_message": q1, "admin_reply": a1})
-    variations.append({"customer_message": q2, "admin_reply": a2})
-    
-    return variations
+    """Generate multiple natural variations of a Q&A pair (Thai + English jargon mixed)."""
+    base_q = _mix_jargon(q_text)
+    ans = a_text
+
+    patterns = [
+        lambda: f"{_pick(OPENERS)} {base_q} {_pick(CLOSERS)}",
+        lambda: f"{base_q} {_pick(['ทำยังไงดีครับ','ต้องทำอะไรบ้างครับ','มีขั้นตอนยังไงค่ะ','ขอรายละเอียดหน่อยครับ'])}",
+        lambda: f"{_pick(['ถามเพิ่มครับ','ขอถามต่อค่ะ','รบกวนหน่อยครับ'])} {base_q}",
+        lambda: f"{base_q} (beginner) {_pick(CLOSERS)}",
+    ]
+    a_patterns = [
+        lambda: f"เรียนคุณลูกค้า {ans}",
+        lambda: f"สวัสดีค่ะ {ans}",
+        lambda: f"สวัสดีครับ {ans}",
+        lambda: f"เรียนคุณลูกค้า {ans} หากต้องการให้ช่วยดูกรณีเฉพาะ กรุณาระบุสัญลักษณ์/series หรือแนบรายละเอียดเพิ่มเติมค่ะ",
+    ]
+
+    out = []
+    # Ensure at least 2 variations for clustering
+    for _ in range(2 + (1 if random.random() < 0.35 else 0)):
+        out.append(
+            {
+                "customer_message": patterns[random.randrange(len(patterns))](),
+                "admin_reply": a_patterns[random.randrange(len(a_patterns))](),
+            }
+        )
+    return out
 
 def main():
     all_data = []
-    for topic_id, scenarios in SCENARIOS.items():
-        ans_base = ANSWERS[topic_id]
-        for i, scenario_text in enumerate(scenarios):
+
+    random.seed(42)
+    # Increase volume + diversity: all scenarios, 2–3 variations each
+    for topic_id, scenario_list in SCENARIOS.items():
+        for i, scenario_text in enumerate(scenario_list):
+            ans_base = _pick(ANSWER_BANK[topic_id])
             pairs = generate_variations(scenario_text, ans_base, topic_id, i)
             all_data.extend(pairs)
+
+    # Add a small amount of realistic “follow-up” style Qs to diversify wording
+    followups = [
+        ("options", "IV ขึ้นแล้ว premium แพงขึ้นนี่คือ vega ใช่ไหมครับ"),
+        ("futures_tfex", "ถ้าเติม margin ไม่ทัน ระบบปิดสถานะให้เลยไหม"),
+        ("stocks_fundamentals", "ดูงบ CF แล้ว cash flow ติดลบควรกังวลไหมครับ"),
+        ("portfolio_strategy", "ถ้าตลาดผันผวนมากควรลด position size หรือ hedge ดีครับ"),
+        ("trading_platform", "ส่งคำสั่งแล้วโดน partial fill คืออะไร แปลว่ามี liquidity ไม่พอใช่ไหม"),
+    ]
+    for t, q in followups:
+        all_data.extend(generate_variations(q, _pick(ANSWER_BANK[t]), t, 999))
             
     output_dir = os.path.join(os.path.dirname(__file__), 'data')
     os.makedirs(output_dir, exist_ok=True)
     out_file = os.path.join(output_dir, 'conversations.json')
     
     with open(out_file, 'w', encoding='utf-8') as f:
-        json.dump(all_data, f, ensure_ascii=False, indent=4)
+        json.dump(all_data, f, ensure_ascii=False, indent=2)
         
-    print(f"Successfully generated {len(all_data)} records (250 scenarios * 2 variations).")
+    print(f"Generated {len(all_data)} records @ {datetime.now().isoformat(timespec='seconds')}")
     print(f"Saved to: {out_file}")
 
 if __name__ == "__main__":

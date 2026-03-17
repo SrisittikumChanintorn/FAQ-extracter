@@ -5,7 +5,7 @@
  *          analytics, data management (select/delete).
  */
 
-const API = 'http://localhost:8000';
+const API = typeof window !== 'undefined' && window.location && window.location.origin ? '' : 'http://localhost:8000';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let state = {
@@ -25,34 +25,27 @@ const STAGE_LABELS = [
   'Load Data',
   'Clean Text',
   'Filter Questions',
-  'Generate AI Embeddings',
-  'Remove Duplicates',
-  'Group Similar Questions',
-  'Quality Check Groups',
-  'Build FAQ Answers (1/3)',
-  'Build FAQ Answers (2/3)',
-  'Build FAQ Answers (3/3)',
+  'LLM Extract FAQs + Groups',
+  'Merge Batches (dedupe)',
   'Build Search Index',
-  'Save Results',
-  'Generate Report',
+  'Save & Report',
 ];
 
 const PAGE_META = {
-  upload:   { title:'Upload Data',             sub:'Accepted formats: Excel, CSV, JSON' },
-  pipeline: { title:'Process & Analyze',        sub:'Run AI extraction pipeline to generate FAQs' },
-  faqs:     { title:'FAQ Library',              sub:'Browse and explore your extracted FAQ library' },
-  search:   { title:'Smart Search',             sub:'Find answers using natural language — AI matches by meaning' },
-  clusters: { title:'Topic Groups',             sub:'Questions grouped by subject — each group becomes one FAQ' },
-  analytics:{ title:'Reports & Charts',         sub:'Insights from the extraction process' },
-  manage:   { title:'Data Management',          sub:'Select and edit individual FAQs, or edit by Topic Groups' },
-  viz:      { title:'3D Cluster Visualization', sub:'FAQ embeddings projected into 3D semantic space via PCA' },
-  manual:   { title:'User Manual',              sub:'Documentation and system guide' },
-  terms:    { title:'Terms of Service',         sub:'System usage terms and conditions' },
-  privacy:  { title:'Privacy Policy',           sub:'Data processing and security policy' },
+  upload:    { title: 'Upload Data',              sub: 'Accepted formats: Excel, CSV, JSON' },
+  manipulate:{ title: 'Data Manipulation',        sub: 'Edit uploaded data before running analysis' },
+  pipeline:  { title: 'Process & Analyze',       sub: 'Run AI extraction pipeline to generate FAQs' },
+  faqs:      { title: 'FAQ Library',             sub: 'Browse and explore your extracted FAQ library' },
+  search:    { title: 'Smart Search',            sub: 'Find answers using natural language — AI matches by meaning' },
+  clusters:  { title: 'Topic Groups',            sub: 'Questions grouped by subject' },
+  analytics: { title: 'Reports & Charts',        sub: 'Insights from the extraction process' },
+  manage:    { title: 'Data Management',         sub: 'Select and edit groups, merge or delete' },
+  viz:       { title: '3D Cluster Visualization', sub: 'FAQ groups in 3D semantic space' },
+  manual:    { title: 'User Manual',             sub: 'Documentation and system guide' },
+  terms:     { title: 'Terms of Service',       sub: 'System usage terms and conditions' },
+  privacy:   { title: 'Privacy Policy',         sub: 'Data processing and security policy' },
 };
 
-let dmViewMode = 'items';
-let dmSelectedGroups = new Set();
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function showLoading(txt='Loading…') {
@@ -68,8 +61,10 @@ function showToast(msg, type='info') {
   c.appendChild(t); setTimeout(()=>t.remove(), 3400);
 }
 
-async function apiFetch(path, opts={}) {
-  const res = await fetch(`${API}${path}`, opts);
+async function apiFetch(path, opts = {}) {
+  const base = API || '';
+  const url = base ? `${base}${path}` : path;
+  const res = await fetch(url, opts);
   if (!res.ok) { const txt = await res.text(); throw new Error(`${res.status}: ${txt}`); }
   return res.json();
 }
@@ -89,20 +84,25 @@ function switchPage(id, el) {
   const m = PAGE_META[id];
   document.getElementById('pageTitle').textContent    = m.title;
   document.getElementById('pageSubtitle').textContent = m.sub;
-  if (id==='manage') renderDMTable();
-  if (id==='viz')    initVisualization();
+  if (id === 'manage') renderDMTable();
+  if (id === 'manipulate') loadRawData();
+  if (id === 'viz') initVisualization();
 }
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 async function checkHealth() {
   try {
-    const d = await apiFetch('/health');
-    document.getElementById('apiDot').className     = 'dot online';
-    document.getElementById('apiStatus').textContent = `Online · ${d.faq_count} FAQs`;
+    const base = API || '';
+    const res = await fetch(base ? `${base}/health` : '/health');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || res.status);
+    document.getElementById('apiDot').className = 'dot online';
+    const n = d.faq_count != null ? d.faq_count : 0;
+    document.getElementById('apiStatus').textContent = n ? `Online · ${n} groups` : 'Online · Ready';
     state.apiReady = true;
   } catch {
-    document.getElementById('apiDot').className     = 'dot';
-    document.getElementById('apiStatus').textContent = 'API Offline';
+    document.getElementById('apiDot').className = 'dot';
+    document.getElementById('apiStatus').textContent = 'Offline';
     state.apiReady = false;
   }
 }
@@ -111,19 +111,19 @@ async function checkHealth() {
 async function loadAll() {
   await checkHealth();
   if (!state.apiReady) {
-    showToast('API is offline. Start the server first.', 'error');
+    showToast('API offline. Start the server first.', 'error');
     return;
   }
-  showLoading('Fetching data…');
+  showLoading('Loading…');
   try {
     const [faqData, clusterData, analyticsData] = await Promise.all([
       apiFetch('/faqs?limit=1000'),
       apiFetch('/clusters'),
       apiFetch('/analytics'),
     ]);
-    state.faqs      = faqData.faqs      || [];
-    state.clusters  = clusterData.clusters || [];
-    state.analytics = analyticsData;
+    state.faqs = faqData.faqs || [];
+    state.clusters = clusterData.clusters || [];
+    state.analytics = analyticsData || null;
     updateStats();
     renderFAQs();
     renderClusters();
@@ -131,146 +131,239 @@ async function loadAll() {
     populateClusterFilter();
     populateHintChips();
     renderDMTable();
-    showToast(`Loaded ${state.faqs.length} FAQs from ${state.clusters.length} topic groups`, 'success');
-  } catch(err) {
-    showToast(`Failed to load data: ${err.message}`, 'error');
+    const totalItems = state.faqs.reduce((a, g) => a + (g.total_faqs || (g.faqs || []).length), 0);
+    showToast(totalItems ? `Loaded ${totalItems} FAQs in ${state.faqs.length} groups` : 'Ready. Upload a file and run analysis.', 'success');
+  } catch (err) {
+    showToast('Failed to load data.', 'error');
   } finally { hideLoading(); }
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 function updateStats() {
-  document.getElementById('stat-faqs').textContent     = (state.faqs.length).toLocaleString();
-  document.getElementById('stat-clusters').textContent = (state.clusters.length).toLocaleString();
-  document.getElementById('badge-faqs').textContent    = state.faqs.length;
-  document.getElementById('badge-clusters').textContent= state.clusters.length;
+  const totalFaqItems = (state.faqs || []).reduce((acc, g) => acc + (g.total_faqs || (g.faqs || []).length), 0);
+  const numGroups = (state.faqs || []).length;
+  const el = (id) => document.getElementById(id);
+  if (el('stat-faqs')) el('stat-faqs').textContent = totalFaqItems.toLocaleString();
+  if (el('stat-clusters')) el('stat-clusters').textContent = numGroups.toLocaleString();
+  if (el('badge-faqs')) el('badge-faqs').textContent = totalFaqItems;
+  if (el('badge-clusters')) el('badge-clusters').textContent = numGroups;
   if (state.analytics?.summary) {
     const s = state.analytics.summary;
-    document.getElementById('stat-conversations').textContent =
-      s.total_conversations?.toLocaleString() ?? '—';
-    document.getElementById('stat-noise').textContent =
-      s.noise_ratio_percent != null ? `${s.noise_ratio_percent}%` : '—';
+    if (el('stat-conversations')) el('stat-conversations').textContent = s.total_conversations?.toLocaleString() ?? '—';
+    if (el('stat-noise')) el('stat-noise').textContent = s.noise_ratio_percent != null ? `${s.noise_ratio_percent}%` : '—';
+  } else {
+    if (el('stat-conversations')) el('stat-conversations').textContent = '—';
+    if (el('stat-noise')) el('stat-noise').textContent = '—';
   }
 }
 
 // ── FAQ Library ───────────────────────────────────────────────────────────────
 function renderFAQs(faqs=state.faqs) {
   const grid = document.getElementById('faqGrid');
-  document.getElementById('faqCount').textContent = `Showing ${faqs.length} items`;
+  document.getElementById('faqCount').textContent = `Show ${faqs.length} groups`;
   if (!faqs.length) {
     grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📭</div>
-      <p>No FAQs yet</p><small>Upload a file, then click "Start Analysis"</small></div>`;
+      <p>No FAQs yet</p><small>Upload a file, then click Start Analysis</small></div>`;
     return;
   }
-  grid.innerHTML = faqs.map((faq,i)=>`
-    <div class="faq-card" id="faq-${i}" onclick="toggleFAQ(${i})">
-      <div class="faq-expand-icon">▶</div>
-      <div class="faq-card-header">
-        <div class="faq-rank">#${i+1}</div>
-        <div style="flex:1;min-width:0;padding-right:26px">
-          <div class="faq-question">${escHtml(faq.faq_question)}</div>
-          <div class="faq-badges">
-            <span class="badge badge-cluster">🔗 Group ${faq.cluster_id}</span>
-            <span class="badge badge-support">🗣️ ${faq.support_count} mentions</span>
-            ${faq.similarity_score!=null
-              ?`<span class="badge badge-score">⚡ ${(faq.similarity_score*100).toFixed(1)}%</span>`:''}
+  
+  grid.innerHTML = faqs.map((g, i) => {
+    const groupName = g.group_name || g.faq_question || 'Unnamed Category';
+    const innerFaqs = g.faqs || [];
+    const totalCount = g.total_faqs || innerFaqs.length || 0;
+    
+    const faqsHtml = innerFaqs.map((faq, j) => {
+      const mention = faq.mention_count != null ? faq.mention_count : 1;
+      return `
+      <div class="inner-faq-card" onclick="this.classList.toggle('expanded')">
+        <div class="inner-faq-header">
+          <div class="inner-faq-q-icon">Q:</div>
+          <div class="inner-faq-question">${escHtml(faq.question)}</div>
+          ${mention > 1 ? `<span class="badge badge-support" style="font-size:10px;flex-shrink:0;">${mention} mentions</span>` : ''}
+          <div class="inner-faq-expand-icon">▶</div>
+        </div>
+        <div class="inner-faq-answer">
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            <div style="color:var(--success);font-weight:700;font-size:12px;margin-top:1px;">A:</div>
+            <div style="flex:1;">${escHtml(faq.answer)}</div>
           </div>
         </div>
       </div>
-      <div class="faq-answer">${escHtml(faq.faq_answer)}</div>
-    </div>`).join('');
+    `}).join('');
+
+    return `
+      <div class="faq-group-card">
+        <div class="faq-group-header">
+          <div class="faq-group-rank">#${i+1}</div>
+          <div class="faq-group-info">
+            <div class="faq-group-title">${escHtml(groupName)}</div>
+            <div class="faq-badges">
+              <span class="badge badge-cluster">📁 Category</span>
+              <span class="badge badge-support">🗣️ ${g.support_count || totalCount} mentions</span>
+              <span class="badge badge-count">📝 ${totalCount} FAQs</span>
+              ${g.confidence_score != null ? `<span class="badge badge-score" title="Confidence Score">⚡ ${Math.round(g.confidence_score * 100)}%</span>` : ''}
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px;border-radius:20px;" onclick="event.stopPropagation(); window.openEditModal(${i})">✏️ Edit Group</button>
+            </div>
+          </div>
+        </div>
+        <div class="faq-group-body">
+          ${faqsHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function toggleFAQ(i) { document.getElementById(`faq-${i}`).classList.toggle('expanded'); }
 
 function populateClusterFilter() {
   const sel = document.getElementById('clusterFilter');
-  const ids = [...new Set(state.faqs.map(f=>f.cluster_id))].sort((a,b)=>a-b);
-  sel.innerHTML = `<option value="">📌 All Topic Groups</option>` +
-    ids.map(id=>`<option value="${id}">Group ${id}</option>`).join('');
+  if (!sel) return;
+  sel.innerHTML = `<option value="">All groups</option>` +
+    state.faqs.map(g => `<option value="${g.cluster_id ?? g.group_id ?? ''}">${escHtml(g.group_name || 'Other')}</option>`).join('');
 }
 
 function filterFAQs() {
   const val = document.getElementById('clusterFilter').value;
-  const filtered = val==='' ? state.faqs : state.faqs.filter(f=>String(f.cluster_id)===val);
+  const filtered = val === '' ? state.faqs : state.faqs.filter(f => String(f.cluster_id ?? f.group_id ?? '') === val);
   renderFAQs(filtered);
 }
 
 // ── Topic Groups ──────────────────────────────────────────────────────────────
-function renderClusters(clusters=state.clusters) {
-  const grid = document.getElementById('clusterGrid');
-  if (!clusters.length) {
-    grid.innerHTML = `<div class="empty-state"><div class="empty-icon">🔗</div><p>No topic groups yet</p></div>`;
-    return;
-  }
-  const maxSup = Math.max(...clusters.map(c=>c.support_count||c.size||0),1);
-  grid.innerHTML = clusters.map(c=>{
-    const pct = Math.round((c.support_count||c.size||0)/maxSup*100);
-    return `<div class="cluster-card">
-      <div class="cluster-id-pill">◆ Group ${c.cluster_id}</div>
-      <div class="cluster-question">${escHtml(c.faq_question||'—')}</div>
-      <div class="cluster-bar-bg"><div class="cluster-bar-fill" style="width:${pct}%"></div></div>
-      <div class="cluster-stats">
-        <span>${c.size??'—'} questions</span>
-        <span>${c.support_count??'—'} mentions</span>
-      </div>
-    </div>`;
-  }).join('');
-}
+function renderClusters() {}
 
 // ── Reports & Charts ──────────────────────────────────────────────────────────
-function renderAnalytics() {
+async function renderAnalytics() {
   const grid = document.getElementById('analyticsGrid');
   if (!state.analytics) {
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">📊</div>
       <p>No analytics yet — run analysis first</p></div>`;
     return;
   }
-  const s        = state.analytics.summary;
-  const topics   = (state.analytics.top_faq_topics||[]).slice(0,8);
-  const noiseQs  = state.analytics.unanswered_noise_questions||[];
-  const maxSup   = Math.max(...topics.map(t=>t.support_count),1);
+  
+  const s = state.analytics.summary;
+  const pass = s.questions_passed_into_groups ?? s.total_clustered_questions ?? 0;
+  const fail = s.questions_discarded ?? ((s.total_valid_questions ?? 0) - (s.total_clustered_questions ?? 0));
+  const total = Math.max(pass + fail, 1);
 
-  const summaryHtml = `<div class="analytics-card"><h3>Pipeline Summary</h3>
-    <div class="summary-grid">${[
-      ['Total Conversations',   (s.total_conversations||0).toLocaleString()],
-      ['Valid Questions',       (s.total_valid_questions||0).toLocaleString()],
-      ['After Dedup',           (s.total_after_deduplication||0).toLocaleString()],
-      ['Duplicates Removed',    (s.total_duplicates_removed||0).toLocaleString()],
-      ['FAQs Generated',        (s.total_faqs_generated||0).toLocaleString()],
-      ['Avg Group Size',        s.average_cluster_size??'—'],
-      ['Clustered Questions',   (s.total_clustered_questions||0).toLocaleString()],
-      ['Unclustered (Noise)',   (s.total_noise_questions||0).toLocaleString()],
-    ].map(([l,v])=>`<div class="summary-item"><span class="summary-lbl">${l}</span><span class="summary-val">${v}</span></div>`).join('')}
-    </div></div>`;
+  // 1. Top Row: Pie chart — Pass Filter vs Not Pass (filtered out / duplicate removed)
+  const topRow = document.getElementById('analyticsTopRow');
+  topRow.innerHTML = `
+    <div class="analytics-card" style="height: 300px; display: flex; flex-direction: column;">
+      <h3>Pass Filter vs Not Pass</h3>
+      <div class="pie-container" style="flex:1; justify-content: center;">
+        ${buildDonut([
+          {label: 'Pass Filter (into FAQ)', value: pass, color: '#10b981'},
+          {label: 'Not Pass (filtered out)', value: fail, color: '#ef4444'}
+        ], total)}
+      </div>
+    </div>
+    <div class="analytics-card" style="height: 300px;">
+      <h3>Pipeline Efficiency</h3>
+      <div class="summary-grid" style="margin-top: 10px;">
+        ${[
+          ['Total Input', (s.total_conversations || 0).toLocaleString()],
+          ['Valid Questions', (s.total_valid_questions || 0).toLocaleString()],
+          ['After Dedup', (s.total_after_deduplication || 0).toLocaleString()],
+          ['Duplicates Removed', (s.total_duplicates_removed || 0).toLocaleString()],
+          ['Groups Created', (s.total_faqs_generated || 0).toLocaleString()],
+          ['Avg Group Size', s.average_cluster_size ?? '—'],
+          ['Clustered Qs', (s.total_clustered_questions || 0).toLocaleString()],
+          ['Noise (Unclustered)', (s.total_noise_questions || 0).toLocaleString()],
+        ].map(([l, v]) => `<div class="summary-item"><span class="summary-lbl">${l}</span><span class="summary-val">${v}</span></div>`).join('')}
+      </div>
+    </div>
+  `;
 
-  const topicsHtml = `<div class="analytics-card"><h3>Top FAQ Topics</h3>
-    <div class="top-topics-list">${topics.map((t,i)=>`
-      <div class="topic-row">
-        <span class="topic-num">${i+1}</span>
-        <div class="topic-info">
-          <div class="topic-q" title="${escHtml(t.faq_question)}">${escHtml(t.faq_question)}</div>
-          <div class="topic-bar-bg"><div class="topic-bar-fill" style="width:${Math.round(t.support_count/maxSup*100)}%"></div></div>
+  // 2. Bottom Left: Raw Table
+  renderAnalyticsRawTable();
+
+  // 3. Bottom Right: FAQ - Mining (same card style as FAQ Library)
+  const groupsList = document.getElementById('analyticsGroupsList');
+  if (!state.faqs.length) {
+    groupsList.innerHTML = '<div class="empty-state" style="padding:20px 0"><p>No groups available. Run analysis first.</p></div>';
+  } else {
+    groupsList.innerHTML = state.faqs.map((g, gi) => {
+      const groupName = g.group_name || 'Other';
+      const innerFaqs = g.faqs || [];
+      const totalCount = g.total_faqs || innerFaqs.length || 0;
+
+      const faqsHtml = innerFaqs.map((faq, j) => `
+        <div class="inner-faq-card" onclick="event.stopPropagation(); this.classList.toggle('expanded')">
+          <div class="inner-faq-header">
+            <div class="inner-faq-q-icon">Q:</div>
+            <div class="inner-faq-question">${escHtml(faq.question || '')}</div>
+            <div class="inner-faq-expand-icon">▶</div>
+          </div>
+          <div class="inner-faq-answer">
+            <div style="display:flex;align-items:flex-start;gap:8px;">
+              <div style="color:var(--success);font-weight:700;font-size:12px;margin-top:1px;">A:</div>
+              <div style="flex:1;">${escHtml(faq.answer || '')}</div>
+            </div>
+          </div>
         </div>
-        <span class="topic-count">${t.support_count}</span>
-      </div>`).join('')}
-    </div></div>`;
+      `).join('');
 
-  const cl=s.total_clustered_questions||0, ns=s.total_noise_questions||0, dp=s.total_duplicates_removed||0;
-  const tot=cl+ns+dp||1;
-  const distHtml = `<div class="analytics-card"><h3>Question Distribution</h3>
-    <div class="pie-container">${buildDonut([
-      {label:'Grouped into FAQs', value:cl, color:'#6366f1'},
-      {label:'Unclustered',       value:ns, color:'#ef4444'},
-      {label:'Duplicates Removed',value:dp, color:'#f59e0b'},
-    ],tot)}</div></div>`;
+      return `
+      <div class="faq-group-card" style="margin-bottom:12px;padding:16px;">
+        <div class="faq-group-header" style="margin-bottom:12px;">
+          <div class="faq-group-rank" style="min-width:28px;height:28px;font-size:11px;">#${gi+1}</div>
+          <div class="faq-group-info">
+            <div class="faq-group-title" style="font-size:14px;">${escHtml(groupName)}</div>
+            <div class="faq-badges">
+              <span class="badge badge-cluster">📁 Category</span>
+              <span class="badge badge-support">🗣️ ${g.support_count || totalCount} mentions</span>
+              <span class="badge badge-count">📝 ${totalCount} FAQs</span>
+            </div>
+          </div>
+        </div>
+        <div class="faq-group-body" style="margin-left:6px;">
+          ${faqsHtml || '<div style="font-size:12px;color:var(--text-muted);padding:8px;">No FAQs</div>'}
+        </div>
+      </div>`;
+    }).join('');
+  }
+}
 
-  const noiseHtml = `<div class="analytics-card"><h3>Unclustered Questions (Sample)</h3>
-    ${noiseQs.length
-      ?`<div class="noise-list">${noiseQs.map(q=>`<div class="noise-item">${escHtml(q)}</div>`).join('')}</div>`
-      :`<div class="empty-state" style="padding:24px 0"><p>No unclustered questions — great grouping! 🎉</p></div>`}
-    </div>`;
-
-  grid.innerHTML = summaryHtml + topicsHtml + distHtml + noiseHtml;
+async function renderAnalyticsRawTable() {
+  const thead = document.querySelector('#analyticsRawTable thead');
+  const tbody = document.getElementById('analyticsRawBody');
+  if (!tbody) return;
+  if (thead) thead.innerHTML = `<tr><th style="width:45%">Question</th><th>Answer</th></tr>`;
+  try {
+    let displayData = [];
+    if (!state.manipulateData) {
+      try {
+        const res = await apiFetch('/uploaded-data');
+        state.manipulateData = res.data || [];
+      } catch (_) {
+        state.manipulateData = [];
+      }
+    }
+    if (state.manipulateData && state.manipulateData.length) {
+      displayData = state.manipulateData.map(row => ({
+        question: row.customer_message || row.question || '',
+        answer: row.admin_reply || row.answer || ''
+      }));
+    } else if (state.faqs && state.faqs.length) {
+      state.faqs.forEach(g => {
+        (g.faqs || []).forEach(f => {
+          displayData.push({ question: f.question || '', answer: f.answer || '' });
+        });
+      });
+    }
+    if (!displayData.length) {
+      tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-muted);padding:20px;">No data available. Upload a file or run analysis first.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = displayData.slice(0, 200).map(row => {
+      const q = String(row.question).substring(0, 150);
+      const a = String(row.answer).substring(0, 150);
+      return `<tr><td><div style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(q)}">${escHtml(q)}</div></td><td><div style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(a)}">${escHtml(a)}</div></td></tr>`;
+    }).join('');
+  } catch (_) {
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-muted);padding:20px;">Error loading data.</td></tr>';
+  }
 }
 
 function buildDonut(segs, tot) {
@@ -328,85 +421,50 @@ function hideChartTooltip() {
 }
 
 // ── Data Management ────────────────────────────────────────────────────────────
-function setDMViewMode(mode) {
-  dmViewMode = mode;
-  document.getElementById('tab-dm-items').classList.toggle('active', mode==='items');
-  document.getElementById('tab-dm-groups').classList.toggle('active', mode==='groups');
-  renderDMTable();
-}
-
 function renderDMTable() {
   const body  = document.getElementById('dmBody');
   const empty = document.getElementById('dmEmpty');
   const label = document.getElementById('dmCountLabel');
   const thead = document.querySelector('#dmTable thead');
-  
+  if (!thead) return;
+
   state.dmSelected.clear();
-  dmSelectedGroups.clear();
-  document.getElementById('cbAll').checked = false;
+  const cbAllEl = document.getElementById('cbAll');
+  if (cbAllEl) cbAllEl.checked = false;
 
-  if (dmViewMode === 'items') {
-    thead.innerHTML = `<tr>
-      <th style="width:40px"><input type="checkbox" class="dm-cb" id="cbAll" onchange="onCbAllChange(this)"></th>
-      <th>No.</th>
-      <th>Question</th>
-      <th>Answer (Preview)</th>
-      <th>Topic Group</th>
-      <th>Mentions</th>
-    </tr>`;
+  thead.innerHTML = `<tr>
+    <th style="width:40px"><input type="checkbox" class="dm-cb" id="cbAll" onchange="onCbAllChange(this)"></th>
+    <th>No.</th>
+    <th>Question</th>
+    <th>Answer (Preview)</th>
+    <th>Groups</th>
+    <th>Mentions</th>
+  </tr>`;
 
-    if (!state.faqs.length) {
-      body.innerHTML = '';
-      empty.style.display = 'block';
-      label.textContent = '';
-      populateRelabelDropdown();
-      updateDeleteBtn();
-      return;
-    }
-    empty.style.display = 'none';
-    label.textContent = `${state.faqs.length} FAQs total`;
-
-    body.innerHTML = state.faqs.map((faq,i)=>`
-      <tr id="dm-row-${i}" onclick="toggleDMRow(event,${i})">
-        <td><input type="checkbox" class="dm-cb" id="dm-cb-${i}" onchange="onRowCbChange(${i})" onclick="event.stopPropagation()"></td>
-        <td style="color:var(--text-muted);font-size:12px;">${i+1}</td>
-        <td><div class="dm-question" title="${escHtml(faq.faq_question)}">${escHtml(faq.faq_question)}</div></td>
-        <td><div class="dm-answer" title="${escHtml(faq.faq_answer)}">${escHtml(faq.faq_answer)}</div></td>
-        <td><span class="badge badge-cluster" title="Topic Group ID">Group ${faq.cluster_id}</span></td>
-        <td><span class="badge badge-support" style="cursor:help;" title="${faq.support_count} related queries were combined to form this FAQ (after duplicates removed).">${faq.support_count}</span></td>
-      </tr>`).join('');
-  } else {
-    thead.innerHTML = `<tr>
-      <th style="width:40px"><input type="checkbox" class="dm-cb" id="cbAll" onchange="onCbAllChange(this)"></th>
-      <th>Group ID</th>
-      <th>Representative Question</th>
-      <th>No. FAQs</th>
-      <th>Mentions</th>
-    </tr>`;
-
-    if (!state.clusters.length) {
-      body.innerHTML = '';
-      empty.style.display = 'block';
-      label.textContent = '';
-      populateRelabelDropdown();
-      updateDeleteBtn();
-      return;
-    }
-    empty.style.display = 'none';
-    label.textContent = `${state.clusters.length} Topic Groups total`;
-
-    body.innerHTML = state.clusters.map((c, i)=>{
-      const gId = c.cluster_id;
-      return `
-      <tr id="dm-row-g${gId}" onclick="toggleDMRowGroup(event,${gId})">
-        <td><input type="checkbox" class="dm-cb" id="dm-cb-g${gId}" onchange="onRowCbGroupChange(${gId})" onclick="event.stopPropagation()"></td>
-        <td><span class="badge badge-cluster" style="font-size:12px;padding:4px 10px;">ID ${gId}</span></td>
-        <td><div class="dm-question" title="${escHtml(c.faq_question||'')}">${escHtml(c.faq_question||'—')}</div></td>
-        <td style="font-weight:600;">${c.size||'—'}</td>
-        <td><span class="badge badge-support">${c.support_count||0}</span></td>
-      </tr>`;
-    }).join('');
+  if (!state.faqs.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    if (label) label.textContent = '';
+    populateRelabelDropdown();
+    updateDeleteBtn();
+    return;
   }
+  empty.style.display = 'none';
+  if (label) label.textContent = `${state.faqs.length} groups`;
+
+  body.innerHTML = state.faqs.map((faq,i)=>`
+    <tr id="dm-row-${i}" draggable="true" ondragstart="window.onDragFAQ(event, ${i})" onclick="toggleDMRow(event,${i})" style="cursor: move;">
+      <td><input type="checkbox" class="dm-cb" id="dm-cb-${i}" onchange="onRowCbChange(${i})" onclick="event.stopPropagation()"></td>
+      <td style="color:var(--text-muted);font-size:12px;">${i+1}</td>
+      <td><div class="dm-question" title="${escHtml(faq.canonical_question || faq.faq_question)}">${escHtml(faq.canonical_question || faq.faq_question)}</div></td>
+      <td><div class="dm-answer" title="${escHtml(faq.canonical_answer || faq.faq_answer)}">${escHtml(faq.canonical_answer || faq.faq_answer)}</div></td>
+      <td><span class="badge badge-cluster">${escHtml(faq.group_name || 'Other')}</span></td>
+      <td>
+        <span class="badge badge-support" style="cursor:help;" title="${faq.support_count} related queries">${faq.support_count}</span>
+        <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10px; margin-left:6px;" onclick="event.stopPropagation(); window.openEditModal(${i})">✏️</button>
+        <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10px;" onclick="event.stopPropagation(); window.openMergeModal(${i})">🔗 Merge</button>
+      </td>
+    </tr>`).join('');
 }
 
 function toggleDMRow(event, i) {
@@ -421,50 +479,26 @@ function onRowCbChange(i) {
   if (cb.checked) { state.dmSelected.add(i); row.classList.add('selected'); }
   else            { state.dmSelected.delete(i); row.classList.remove('selected'); }
   updateDeleteBtn();
-  document.getElementById('cbAll').checked = (state.dmSelected.size === state.faqs.length);
-}
-
-function toggleDMRowGroup(event, gId) {
-  const cb = document.getElementById(`dm-cb-g${gId}`);
-  cb.checked = !cb.checked;
-  onRowCbGroupChange(gId);
-}
-
-function onRowCbGroupChange(gId) {
-  const cb = document.getElementById(`dm-cb-g${gId}`);
-  const row= document.getElementById(`dm-row-g${gId}`);
-  if (cb.checked) { dmSelectedGroups.add(gId); row.classList.add('selected'); }
-  else            { dmSelectedGroups.delete(gId); row.classList.remove('selected'); }
-  updateDeleteBtn();
-  document.getElementById('cbAll').checked = (dmSelectedGroups.size === state.clusters.length);
+  const cbAll = document.getElementById('cbAll');
+  if (cbAll) cbAll.checked = (state.faqs.length > 0 && state.dmSelected.size === state.faqs.length);
 }
 
 function onCbAllChange(cbAll) {
-  if (dmViewMode === 'items') {
-    state.faqs.forEach((_,i)=>{
-      const cb  = document.getElementById(`dm-cb-${i}`);
-      const row = document.getElementById(`dm-row-${i}`);
-      if (!cb || !row) return;
-      cb.checked = cbAll.checked;
-      if (cbAll.checked) { state.dmSelected.add(i); row.classList.add('selected'); }
-      else               { state.dmSelected.delete(i); row.classList.remove('selected'); }
-    });
-  } else {
-    state.clusters.forEach(c => {
-      const gId = c.cluster_id;
-      const cb  = document.getElementById(`dm-cb-g${gId}`);
-      const row = document.getElementById(`dm-row-g${gId}`);
-      if (!cb || !row) return;
-      cb.checked = cbAll.checked;
-      if (cbAll.checked) { dmSelectedGroups.add(gId); row.classList.add('selected'); }
-      else               { dmSelectedGroups.delete(gId); row.classList.remove('selected'); }
-    });
-  }
+  const checked = !!cbAll && cbAll.checked;
+  state.faqs.forEach((_, i) => {
+    const cb = document.getElementById(`dm-cb-${i}`);
+    const row = document.getElementById(`dm-row-${i}`);
+    if (!cb || !row) return;
+    cb.checked = checked;
+    if (checked) { state.dmSelected.add(i); row.classList.add('selected'); }
+    else { state.dmSelected.delete(i); row.classList.remove('selected'); }
+  });
   updateDeleteBtn();
 }
 
 function toggleSelectAll() {
   const cbAll = document.getElementById('cbAll');
+  if (!cbAll) return;
   cbAll.checked = !cbAll.checked;
   onCbAllChange(cbAll);
 }
@@ -472,42 +506,22 @@ function toggleSelectAll() {
 function updateDeleteBtn() {
   const btn = document.getElementById('deleteSelectedBtn');
   const relabelBtn = document.getElementById('editGroupBtn');
-  const n = dmViewMode === 'items' ? state.dmSelected.size : dmSelectedGroups.size;
-  const isAll = dmViewMode === 'items' 
-    ? (state.dmSelected.size === state.faqs.length && state.faqs.length > 0)
-    : (dmSelectedGroups.size === state.clusters.length && state.clusters.length > 0);
-  
-  document.getElementById('deleteSelectedCount').textContent = n;
-  
+  const n = state.dmSelected.size;
+  const isAll = state.faqs.length > 0 && state.dmSelected.size === state.faqs.length;
+
   const relabelCount = document.getElementById('relabelSelectedCount');
-  if(relabelCount) relabelCount.textContent = n;
+  if (relabelCount) relabelCount.textContent = n;
 
-  btn.disabled = (n === 0);
-  if(relabelBtn) relabelBtn.disabled = (n === 0);
-
-  document.getElementById('selectAllBtn').textContent = isAll ? '☐ Deselect All' : '☑ Select All';
+  if (btn) btn.disabled = (n === 0);
+  if (relabelBtn) relabelBtn.disabled = (n === 0);
+  const selectAllBtn = document.getElementById('selectAllBtn');
+  if (selectAllBtn) selectAllBtn.innerHTML = isAll ? '☐ Select All' : '☑ Select All';
 }
 
 async function deleteSelected() {
-  let indices = [];
-  if (dmViewMode === 'items') {
-    if (state.dmSelected.size === 0) return;
-    indices = [...state.dmSelected].sort((a,b)=>b-a);
-  } else {
-    if (dmSelectedGroups.size === 0) return;
-    state.faqs.forEach((f, i) => {
-      if (dmSelectedGroups.has(f.cluster_id)) indices.push(i);
-    });
-    indices.sort((a,b)=>b-a);
-  }
-
-  if (indices.length === 0) return;
-
-  const msg = dmViewMode === 'items' 
-    ? `Delete ${indices.length} FAQ(s)?`
-    : `Delete ${dmSelectedGroups.size} Topic Group(s)? This will delete ${indices.length} FAQs across these groups.`;
-    
-  if (!confirm(`${msg}\n\nThis cannot be undone.`)) return;
+  if (state.dmSelected.size === 0) return;
+  const indices = [...state.dmSelected].sort((a,b)=>b-a);
+  if (!confirm(`Delete ${indices.length} group(s)? This cannot be undone.`)) return;
 
   const deleteBtn = document.getElementById('deleteSelectedBtn');
   deleteBtn.disabled = true;
@@ -520,16 +534,13 @@ async function deleteSelected() {
       body: JSON.stringify({ indices }),
     });
 
-    // ── 1. Update the single source of truth ──────────────────────────
     const deletedSet   = new Set(indices);
     const remainingFAQs = state.faqs.filter((_,i) => !deletedSet.has(i));
     state.faqs         = remainingFAQs;
     state.dmSelected.clear();
-    dmSelectedGroups.clear();
 
-    // ── 2. Derive clusters from surviving FAQs ────────────────────────
     const survivingClusterIds = new Set(remainingFAQs.map(f => f.cluster_id));
-    state.clusters = state.clusters.filter(c => survivingClusterIds.has(c.cluster_id));
+    state.clusters = (state.analytics && state.analytics.cluster_sizes) ? state.analytics.cluster_sizes.filter(c => survivingClusterIds.has(c.cluster_id)) : [];
 
     // ── 3. Patch analytics summary counts to match reality ────────────
     if (state.analytics?.summary) {
@@ -561,30 +572,19 @@ async function deleteSelected() {
     showToast(`Delete failed: ${err.message}`, 'error');
   } finally {
     deleteBtn.disabled = false;
-    deleteBtn.innerHTML = `🗑 Delete Selected (<span id="deleteSelectedCount">0</span>)`;
+    deleteBtn.innerHTML = '🗑 Delete';
     updateDeleteBtn();
   }
 }
 
 // ── Relabel (Edit Group) ──────────────────────────────────────────────────────
 async function relabelSelected(newClusterId) {
-  toggleEditDropdown(); 
-  
-  let indices = [];
-  if (dmViewMode === 'items') {
-    if (state.dmSelected.size === 0) return;
-    indices = [...state.dmSelected];
-  } else {
-    if (dmSelectedGroups.size === 0) return;
-    state.faqs.forEach((f, i) => {
-      if (dmSelectedGroups.has(f.cluster_id)) indices.push(i);
-    });
-  }
-
+  toggleEditDropdown();
+  if (state.dmSelected.size === 0) return;
+  const indices = [...state.dmSelected];
   if (isNaN(newClusterId) || indices.length === 0) return;
-
-  const countStr = dmViewMode === 'items' ? `${indices.length} FAQ(s)` : `all FAQs in ${dmSelectedGroups.size} selected Group(s) (${indices.length} total)`;
-  if (!confirm(`Move ${countStr} to Group ${newClusterId}?`)) return;
+  const targetName = (state.clusters.find(c => c.cluster_id === newClusterId) || {}).group_name || newClusterId;
+  if (!confirm(`Move ${indices.length} group(s) to "${targetName}"?`)) return;
 
   const relabelBtn = document.getElementById('editGroupBtn');
   relabelBtn.disabled = true;
@@ -601,10 +601,7 @@ async function relabelSelected(newClusterId) {
     indices.forEach(i => {
       state.faqs[i].cluster_id = newClusterId;
     });
-    
-    // Clear selection so the UI resets cleanly
     state.dmSelected.clear();
-    dmSelectedGroups.clear();
 
     // 2. Refresh analytics
     try {
@@ -640,31 +637,24 @@ function toggleEditDropdown() {
     return;
   }
   
-  // Populate menu with current clusters
-  let html = '';
-  if (state.clusters.length === 0) {
-    html = `<div style="padding:10px 14px;font-size:12px;color:var(--text-muted);text-align:center;">No groups available</div>`;
-  } else {
-    // Also add option to create "New Group" at the top
-    const nextId = Math.max(0, ...state.clusters.map(c=>c.cluster_id)) + 1;
-    html += `<div style="padding:8px 14px;font-size:12px;font-weight:600;color:var(--text-primary);cursor:pointer;border-bottom:1px solid var(--border);" 
-               onmouseenter="showRelabelPreviewForGroup(${nextId})" 
-               onmouseleave="hideRelabelPreview()"
-               onclick="relabelSelected(${nextId})">
-               ✨ Move to New Group (${nextId})
-             </div>`;
-             
-    state.clusters.forEach(c => {
-      html += `<div style="padding:8px 14px;font-size:12px;color:var(--text-secondary);cursor:pointer;transition:background 0.2s;" 
-                 onmouseenter="this.style.background='var(--bg-glass-hover)'; showRelabelPreviewForGroup(${c.cluster_id})" 
+    const clusters = state.clusters.length ? state.clusters : state.faqs.map((f, i) => ({ cluster_id: f.cluster_id ?? i, group_name: f.group_name, size: f.total_faqs, support_count: f.support_count }));
+    let html = '';
+    if (!clusters.length) {
+      html = `<div style="padding:10px 14px;font-size:12px;color:var(--text-muted);text-align:center;">No other groups</div>`;
+    } else {
+      clusters.forEach(c => {
+        const cid = c.cluster_id ?? c.group_id;
+        const name = c.group_name || c.faq_question || 'Other';
+        html += `<div style="padding:8px 14px;font-size:12px;color:var(--text-secondary);cursor:pointer;transition:background 0.2s;" 
+                 onmouseenter="this.style.background='var(--bg-glass-hover)'; showRelabelPreviewForGroup(${cid})" 
                  onmouseleave="this.style.background='transparent'; hideRelabelPreview()"
-                 onclick="relabelSelected(${c.cluster_id})">
-                 🔗 Group ${c.cluster_id} <span style="float:right;color:var(--text-muted);font-size:10px;">${c.size||c.support_count||0} faqs</span>
+                 onclick="relabelSelected(${cid})">
+                 📁 ${escHtml(name)} <span style="float:right;color:var(--text-muted);font-size:10px;">${c.size||c.support_count||0}</span>
                </div>`;
-    });
-  }
-  menu.innerHTML = html;
-  menu.style.display = 'block';
+      });
+    }
+    menu.innerHTML = html;
+    menu.style.display = 'block';
 }
 
 // Relabel Hover Tooltip Logic
@@ -677,21 +667,15 @@ function showRelabelPreviewForGroup(clusterId) {
   const preview = document.getElementById('relabelPreview');
   const list = document.getElementById('relabelPreviewList');
   const title = document.getElementById('relabelPreviewTitle');
-  
-  if(!preview || !list || !title) return;
-  
-  const groupFaqs = state.faqs.filter(f => f.cluster_id === clusterId);
-  if(groupFaqs.length === 0) {
-    title.textContent = `New Group ${clusterId}`;
-    list.innerHTML = `<li>Empty group. FAQs moved here will form a new topic.</li>`;
+  if (!preview || !list || !title) return;
+  const grp = state.faqs.find(f => (f.cluster_id ?? f.group_id) === clusterId);
+  if (!grp) {
+    title.textContent = 'Destination group';
+    list.innerHTML = '<li>Selected group</li>';
   } else {
-    title.textContent = `Group ${clusterId} Preview`;
-    // Take top 3 examples
-    const samples = groupFaqs.slice(0,3);
-    list.innerHTML = samples.map(f => `<li>${escHtml(f.faq_question.substring(0, 60))}...</li>`).join('');
-    if(groupFaqs.length > 3) {
-      list.innerHTML += `<li style="list-style:none;color:var(--text-muted);font-style:italic;margin-top:4px;">+ ${groupFaqs.length - 3} more</li>`;
-    }
+    title.textContent = grp.group_name || 'Other';
+    const samples = (grp.faqs || []).slice(0, 3);
+    list.innerHTML = samples.map(f => `<li>${escHtml((f.question || '').substring(0, 50))}…</li>`).join('') || '<li>—</li>';
   }
   preview.style.display = 'block';
 }
@@ -847,7 +831,7 @@ function initStageList() {
 }
 
 function updateStageUI(cur) {
-  for(let i=1;i<=13;i++){
+  for(let i=1;i<=7;i++){
     const row=document.getElementById(`stage-row-${i}`);
     const icon=document.getElementById(`stage-icon-${i}`);
     if(!row||!icon) continue;
@@ -865,7 +849,9 @@ async function runPipeline() {
   try {
     const res = await apiFetch('/run-pipeline', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({input_file: ''}),
+      body: JSON.stringify({
+          input_file: state.uploadedPath || "",
+      }),
     });
     appendLog(`▶ ${res.message}`, 'log-stage');
     appendLog(`📄 Input: ${res.input_file}`, 'log-info');
@@ -922,7 +908,8 @@ async function pollStatus() {
     }
     if(d.status==='running'){
       document.getElementById('apiDot').className = 'dot running';
-      document.getElementById('apiStatus').textContent = `Analyzing… Step ${d.stage}/13`;
+      const total = d.total_stages || 7;
+      document.getElementById('apiStatus').textContent = `Analyzing… Step ${d.stage}/${total}`;
     }
   } catch{}
 }
@@ -985,22 +972,30 @@ async function doSearch(q) {
 function renderSearchFAQs(items, q) {
   const el = document.getElementById('searchResults');
   if(!items.length){el.innerHTML=`<div class="empty-state"><div class="empty-icon">🔍</div><p>No FAQs found for "${escHtml(q)}"</p></div>`;return;}
-  el.innerHTML=`<div class="faq-grid">${items.map((faq,i)=>`
-    <div class="faq-card" id="sfaq-${i}" onclick="document.getElementById('sfaq-${i}').classList.toggle('expanded')">
-      <div class="faq-expand-icon">▶</div>
-      <div class="faq-card-header">
-        <div class="faq-rank">#${i+1}</div>
-        <div style="flex:1;min-width:0;padding-right:26px">
-          <div class="faq-question">${escHtml(faq.faq_question)}</div>
-          <div class="faq-badges">
-            <span class="badge badge-cluster">🔗 Group ${faq.cluster_id}</span>
-            <span class="badge badge-support">🗣️ ${faq.support_count} mentions</span>
-            ${faq.similarity_score!=null?`<span class="badge badge-score">⚡ ${(faq.similarity_score*100).toFixed(1)}%</span>`:''}
+  el.innerHTML = `<div class="search-cards-grid">${items.map((faq, i) => {
+    const simPct = faq.similarity_score != null ? (faq.similarity_score * 100).toFixed(1) : null;
+    return `
+    <div class="search-result-card" onclick="this.classList.toggle('expanded')">
+      <div class="src-header">
+        <div class="src-rank">#${i+1}</div>
+        <div class="src-content">
+          <div class="src-question">${escHtml(faq.faq_question)}</div>
+          <div class="src-meta">
+            <span class="badge badge-cluster">📁 ${escHtml(faq.group_name || 'Unnamed')}</span>
+            <span class="badge badge-support">🗣️ ${faq.support_count || 1} mentions</span>
+            ${simPct != null ? `<span class="badge badge-score">⚡ ${simPct}%</span>` : ''}
           </div>
         </div>
+        <div class="src-expand-icon">▶</div>
       </div>
-      <div class="faq-answer">${escHtml(faq.faq_answer)}</div>
-    </div>`).join('')}</div>`;
+      <div class="src-answer">
+        <div style="display:flex;align-items:flex-start;gap:8px;">
+          <div style="color:var(--success);font-weight:700;font-size:12px;margin-top:1px;">A:</div>
+          <div style="flex:1;line-height:1.6;">${escHtml(faq.faq_answer || faq.suggested_admin_reply || '')}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 
@@ -1033,7 +1028,7 @@ async function loadRawData() {
 
     const res = await apiFetch('/uploaded-data');
     if (!res.data || res.data.length === 0) {
-      empty.innerHTML = 'File is empty or no valid data found.';
+      empty.innerHTML = 'No uploaded data found.';
       return;
     }
 
@@ -1071,8 +1066,8 @@ async function loadRawData() {
     if(res.data.length > 500) {
         showToast('Viewing top 500 rows for performance. Full file will be saved.', 'info');
     }
-  } catch(err) {
-    empty.innerHTML = `No uploaded data found or error: ${err.message}`;
+  } catch (err) {
+    empty.innerHTML = 'No uploaded data found.';
     tableWrap.style.display = 'none';
   }
 }
@@ -1122,3 +1117,155 @@ async function saveRawData() {
     try { await loadAll(); } catch {}
   }
 })();
+
+// ── Export ──────────────────────────────────────────────────────────────────
+window.exportData = function(format) {
+  if (!state.faqs || state.faqs.length === 0) {
+    showToast('No FAQs to export', 'warning');
+    return;
+  }
+  window.open(`${API}/export?fmt=${format}`, '_blank');
+};
+
+// ── Edit FAQ ────────────────────────────────────────────────────────────────
+let editingFaqIndex = -1;
+window.openEditModal = function(index) {
+  editingFaqIndex = index;
+  const faq = state.faqs[index];
+  document.getElementById('editQuestionInput').value = faq.canonical_question || faq.faq_question;
+  document.getElementById('editAnswerInput').value = faq.canonical_answer || faq.faq_answer;
+  document.getElementById('editModal').classList.add('visible');
+};
+window.closeEditModal = function() {
+  document.getElementById('editModal').classList.remove('visible');
+  editingFaqIndex = -1;
+};
+window.saveFAQEdit = async function() {
+  if (editingFaqIndex < 0) return;
+  const btn = document.getElementById('saveEditBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  
+  const q = document.getElementById('editQuestionInput').value;
+  const a = document.getElementById('editAnswerInput').value;
+  
+  try {
+    await apiFetch('/faqs/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index: editingFaqIndex, question: q, answer: a })
+    });
+    
+    // Update local state
+    state.faqs[editingFaqIndex].canonical_question = q;
+    state.faqs[editingFaqIndex].faq_question = q;
+    state.faqs[editingFaqIndex].canonical_answer = a;
+    state.faqs[editingFaqIndex].faq_answer = a;
+    state.faqs[editingFaqIndex].suggested_admin_reply = a;
+    
+    // Refresh UI
+    renderFAQs();
+    if(document.getElementById('page-manage').classList.contains('active')) renderDMTable();
+    
+    showToast('FAQ updated successfully', 'success');
+    closeEditModal();
+  } catch(err) {
+    showToast(`Failed to update FAQ: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save Changes';
+  }
+};
+
+// ── Merge Groups ────────────────────────────────────────────────────────────
+let mergeSourceIndex = -1;
+let mergeSourceId = -1;
+window.openMergeModal = function(groupIndex) {
+  mergeSourceIndex = groupIndex;
+  const grp = state.faqs[groupIndex];
+  if (!grp) return;
+  mergeSourceId = grp.cluster_id ?? grp.group_id ?? groupIndex;
+  const nameEl = document.getElementById('mergeSourceGroupName');
+  if (nameEl) nameEl.textContent = grp.group_name || 'Other';
+  const sel = document.getElementById('mergeTargetSelect');
+  if (sel) {
+    sel.innerHTML = state.faqs
+      .filter((_, j) => j !== groupIndex)
+      .map(g => `<option value="${g.cluster_id ?? g.group_id ?? 0}">${escHtml(g.group_name || 'Other')}</option>`)
+      .join('') || '<option value="">No other groups</option>';
+  }
+  document.getElementById('mergeModal').classList.add('visible');
+};
+window.closeMergeModal = function() {
+  document.getElementById('mergeModal').classList.remove('visible');
+  mergeSourceIndex = -1;
+  mergeSourceId = -1;
+};
+window.saveMergeGroups = async function() {
+  const sel = document.getElementById('mergeTargetSelect');
+  const targetId = sel ? parseInt(sel.value, 10) : NaN;
+  if (isNaN(targetId) || targetId === mergeSourceId) {
+    showToast('Please select a target group.', 'error');
+    return;
+  }
+  const btn = document.getElementById('saveMergeBtn');
+  btn.disabled = true; btn.textContent = 'Merging…';
+  try {
+    const res = await apiFetch('/faqs/merge-groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_group_id: mergeSourceId, target_group_id: targetId })
+    });
+    state.faqs.forEach(f => {
+      if (f.cluster_id === mergeSourceId) f.cluster_id = targetId;
+      if (f.group_id === mergeSourceId) f.group_id = targetId;
+    });
+    if (state.analytics && state.analytics.cluster_sizes) {
+      const srcC = state.analytics.cluster_sizes.find(c => c.cluster_id === mergeSourceId);
+      const tgtC = state.analytics.cluster_sizes.find(c => c.cluster_id === targetId);
+      if (tgtC && srcC) {
+        tgtC.size = (tgtC.size || 0) + (srcC.size || 0);
+        state.analytics.cluster_sizes = state.analytics.cluster_sizes.filter(c => c.cluster_id !== mergeSourceId);
+      }
+    }
+    updateStats();
+    renderFAQs();
+    populateClusterFilter();
+    renderAnalytics();
+    renderDMTable();
+    showToast(`Merged ${res.merged_count} FAQs into the target group.`, 'success');
+    closeMergeModal();
+  } catch (err) {
+    showToast('Merge failed.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Merge Groups';
+  }
+};
+
+// ── Drag & Drop Reassignment ────────────────────────────────────────────────
+let draggedFaqIndex = -1;
+window.onDragFAQ = function(e, index) {
+  draggedFaqIndex = index;
+  e.dataTransfer.effectAllowed = 'move';
+};
+window.onDropFAQ = async function(e, targetGroupId) {
+  e.preventDefault();
+  if (draggedFaqIndex < 0) return;
+  const sourceIndex = draggedFaqIndex;
+  draggedFaqIndex = -1;
+  const faq = state.faqs[sourceIndex];
+  if(faq.cluster_id === targetGroupId) return;
+  
+  try {
+    await apiFetch('/faqs/relabel', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ indices: [sourceIndex], new_cluster_id: targetGroupId }),
+    });
+    
+    faq.cluster_id = targetGroupId;
+    renderDMTable();
+    showToast(`Moved FAQ to Group ${targetGroupId}`, 'success');
+  } catch(err) {
+    showToast(`Failed to move: ${err.message}`, 'error');
+  }
+};

@@ -36,6 +36,11 @@ _GREETING_ONLY_PATTERNS = re.compile(
     r"^(hi|hello|hey|ok|okay|yes|no|thanks|thank you|bye|goodbye|good|nice|great|sure|alright)\.?$",
     re.IGNORECASE,
 )
+# Thai-only: polite particles or greeting alone (not a real question)
+_GREETING_ONLY_THAI = re.compile(
+    r"^(ครับ|ค่ะ|คะ|นะครับ|นะค่ะ|นะคะ|ครับครับ|ค่ะค่ะ|สวัสดี|ขอโทษ|ขอบคุณ|ครับค่ะ)?\.?$",
+    re.UNICODE,
+)
 
 
 def _strip_emoji(text: str) -> str:
@@ -76,6 +81,10 @@ def _is_valid_question(clean_question: str) -> tuple[bool, str]:
     # 5. Greeting-only (English)
     if _GREETING_ONLY_PATTERNS.match(text_stripped):
         return False, "greeting_only"
+
+    # 5b. Thai greeting/politeness only (no real question)
+    if _GREETING_ONLY_THAI.match(text_stripped) and len(text_stripped) <= 20:
+        return False, "greeting_only_thai"
 
     # 6. Contains at least one Thai or Latin alphabet character
     has_alpha = any(unicodedata.category(c).startswith("L") for c in text_stripped)

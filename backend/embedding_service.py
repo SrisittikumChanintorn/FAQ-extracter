@@ -1,8 +1,5 @@
 """
-embedding_service.py — Stage 4: Sentence Embedding (BAAI/bge-m3)
-Generates 1024-dim dense embeddings using BAAI/bge-m3.
-bge-m3 natively supports Thai and 100+ languages.
-Supports batch processing, instruction prefixes, and numpy cache.
+embedding_service.py — Sentence embedding (BAAI/bge-m3) for merge dedupe and search index.
 """
 
 import logging
@@ -11,9 +8,7 @@ import sys
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.config import (
@@ -25,9 +20,6 @@ from backend.config import (
     EMBEDDING_QUERY_PREFIX,
     EMBEDDING_SHOW_PROGRESS,
     EMBEDDING_USE_INSTRUCTION,
-    EMBEDDINGS_CACHE_FILE,
-    EMBEDDINGS_IDS_CACHE_FILE,
-    FIELD_CLEAN_QUESTION,
     LOG_FORMAT,
     LOG_DATE_FORMAT,
     LOG_LEVEL,
@@ -108,57 +100,3 @@ def l2_normalize(embeddings: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1e-10, norms)
     return embeddings / norms
-
-
-def generate_embeddings(
-    df: pd.DataFrame,
-    use_cache: bool = True,
-    cache_file: str = EMBEDDINGS_CACHE_FILE,
-    ids_cache_file: str = EMBEDDINGS_IDS_CACHE_FILE,
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """
-    Stage 4 entry point.
-    Generates (or loads cached) embeddings for all clean questions.
-
-    All corpus texts are treated as passages (no instruction prefix), which is
-    the correct bge-m3 convention for indexing. Queries use is_query=True.
-
-    Args:
-        df:            DataFrame with FIELD_CLEAN_QUESTION column and 'row_id'.
-        use_cache:     If True, skip re-embedding if cache exists for same row_ids.
-        cache_file:    Path to save/load embedding .npy cache.
-        ids_cache_file: Path to save/load row_id .npy cache.
-
-    Returns:
-        (embeddings, df) — raw float32 embeddings (not normalised), same-order df
-    """
-    texts = df[FIELD_CLEAN_QUESTION].tolist()
-    row_ids = df["row_id"].values
-
-    if use_cache and os.path.isfile(cache_file) and os.path.isfile(ids_cache_file):
-        cached_ids = np.load(ids_cache_file)
-        if np.array_equal(cached_ids, row_ids):
-            embeddings = np.load(cache_file)
-            if embeddings.shape[1] == EMBEDDING_DIMENSION:
-                logger.info(
-                    f"Stage 4: Loaded {len(embeddings)} cached embeddings from {cache_file}"
-                )
-                return embeddings, df
-            else:
-                logger.warning(
-                    f"Cached embeddings dim {embeddings.shape[1]} != {EMBEDDING_DIMENSION}. "
-                    "Re-generating (model changed)."
-                )
-        else:
-            logger.info("Cache row_ids mismatch — re-generating embeddings.")
-
-    # Corpus passages: is_query=False (no instruction prefix for bge-m3 passages)
-    embeddings = encode_texts(texts, is_query=False)
-
-    # Persist cache
-    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-    np.save(cache_file, embeddings)
-    np.save(ids_cache_file, row_ids)
-    logger.info(f"Stage 4 complete: Embeddings saved to {cache_file}")
-
-    return embeddings, df

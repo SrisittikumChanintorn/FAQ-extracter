@@ -70,7 +70,7 @@ class FAQSearchIndex:
             rep_qs = group.get("representative_questions", [])
             # Fallback: if no representative questions, use group_name
             if not rep_qs:
-                rep_qs = [group.get("group_name", f"group_{g_idx}")]
+                rep_qs = [group.get("group_name") or "Other"]
             for q in rep_qs:
                 all_texts.append(q)
                 self._vector_to_group.append(g_idx)

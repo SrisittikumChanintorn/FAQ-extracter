@@ -14,8 +14,9 @@ const VIZ_PALETTE = [
 const V = {
   scene: null, camera: null, renderer: null, controls: null,
   pointsMesh: null,
-  data: [],           // flat array of {x,y,z,cluster_id,faq_question,...}
-  clustersMap: {},    // { "0": [pt,...], "1": [...] }
+  pointsMeshSelected: null,
+  data: [],           // flat array of {x,y,z,cluster_id,group_name,faq_question,...}
+  clustersMap: {},    // { "0": {group_name, pts:[...]}, ... }
   selectedGroup: null,
   raycaster: new THREE.Raycaster(),
   mouse: new THREE.Vector2(),
@@ -23,7 +24,7 @@ const V = {
   rafId: null,
   canvasEl: null,
 };
-V.raycaster.params.Points = { threshold: 0.3 };
+V.raycaster.params.Points = { threshold: 0.45 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function vizColor(clusterId) {
@@ -70,8 +71,9 @@ async function initVisualization() {
   V.clustersMap = {};
   V.data.forEach(pt => {
     const k = String(pt.cluster_id);
-    if (!V.clustersMap[k]) V.clustersMap[k] = [];
-    V.clustersMap[k].push(pt);
+    if (!V.clustersMap[k]) V.clustersMap[k] = { group_name: pt.group_name || `Group ${k}`, pts: [] };
+    if (!V.clustersMap[k].group_name && pt.group_name) V.clustersMap[k].group_name = pt.group_name;
+    V.clustersMap[k].pts.push(pt);
   });
 
   spinEl.style.display = 'none';
@@ -90,7 +92,7 @@ function setupVizScene(container) {
   // Scene
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#070c18');
-  scene.fog = new THREE.FogExp2('#070c18', 0.028);
+  scene.fog = new THREE.FogExp2('#070c18', 0.012);
   V.scene = scene;
 
   // Camera
@@ -143,6 +145,9 @@ function setupVizScene(container) {
   window.addEventListener('resize', onVizResize);
 }
 
+// Neutral color for all FAQ points (no group distinction by default)
+const VIZ_NEUTRAL = new THREE.Color('#60a5fa');  // soft blue
+
 // ── Point cloud ───────────────────────────────────────────────────────────────
 function buildPointCloud() {
   const n = V.data.length;
@@ -162,10 +167,10 @@ function buildPointCloud() {
     const sy = ((pt.y - minY) / rY - 0.5) * SPREAD;
     const sz = ((pt.z - minZ) / rZ - 0.5) * SPREAD;
     pos[i*3] = sx; pos[i*3+1] = sy; pos[i*3+2] = sz;
-    pt._sx = sx; pt._sy = sy; pt._sz = sz;   // store for later
+    pt._sx = sx; pt._sy = sy; pt._sz = sz;
 
-    const c = vizColor(pt.cluster_id);
-    col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+    // Default: all points use the same neutral color (no group distinction)
+    col[i*3] = VIZ_NEUTRAL.r; col[i*3+1] = VIZ_NEUTRAL.g; col[i*3+2] = VIZ_NEUTRAL.b;
   });
 
   const geo = new THREE.BufferGeometry();
@@ -174,36 +179,84 @@ function buildPointCloud() {
   geo.computeBoundingSphere();
 
   const mat = new THREE.PointsMaterial({
-    size: 0.45,
+    size: 0.6,
     vertexColors: true,
     sizeAttenuation: true,
     transparent: true,
-    opacity: 0.95,
+    opacity: 0.92,
   });
 
-  if (V.pointsMesh) { V.scene.remove(V.pointsMesh); V.pointsMesh.geometry.dispose(); }
+  if (V.pointsMesh) { V.scene.remove(V.pointsMesh); V.pointsMesh.geometry.dispose(); V.pointsMesh.material.dispose?.(); }
   V.pointsMesh = new THREE.Points(geo, mat);
   V.scene.add(V.pointsMesh);
+
+  if (V.pointsMeshSelected) {
+    V.scene.remove(V.pointsMeshSelected);
+    V.pointsMeshSelected.geometry.dispose();
+    V.pointsMeshSelected.material.dispose?.();
+    V.pointsMeshSelected = null;
+  }
 }
 
-// ── Refresh colors after selection change ─────────────────────────────────────
-function refreshVizColors() {
+// ── Selection rendering (neutral base → grey + red highlight on select) ───────
+function applyVizSelection() {
   if (!V.pointsMesh) return;
-  const colAttr = V.pointsMesh.geometry.attributes.color;
-  const sel     = V.selectedGroup;
+  const sel = V.selectedGroup;
+  const baseCol = V.pointsMesh.geometry.attributes.color;
 
-  V.data.forEach((pt, i) => {
-    let c;
-    if (sel === null) {
-      c = vizColor(pt.cluster_id);
-    } else if (String(pt.cluster_id) === sel) {
-      c = new THREE.Color('#ef4444');  // selected = red
-    } else {
-      c = new THREE.Color('#1e293b');  // unselected = near-background dark
+  if (sel == null) {
+    // No group selected → restore all points to neutral uniform color
+    V.data.forEach((pt, i) => {
+      baseCol.setXYZ(i, VIZ_NEUTRAL.r, VIZ_NEUTRAL.g, VIZ_NEUTRAL.b);
+    });
+    baseCol.needsUpdate = true;
+    V.pointsMesh.material.opacity = 0.92;
+    if (V.pointsMeshSelected) {
+      V.scene.remove(V.pointsMeshSelected);
+      V.pointsMeshSelected.geometry.dispose();
+      V.pointsMeshSelected.material.dispose?.();
+      V.pointsMeshSelected = null;
     }
-    colAttr.setXYZ(i, c.r, c.g, c.b);
+    return;
+  }
+
+  // Group selected → grey out all base points
+  const grey = new THREE.Color('#334155');
+  V.data.forEach((pt, i) => {
+    baseCol.setXYZ(i, grey.r, grey.g, grey.b);
   });
-  colAttr.needsUpdate = true;
+  baseCol.needsUpdate = true;
+  V.pointsMesh.material.opacity = 0.18;
+
+  // Build red overlay for selected group's FAQ points only
+  const selPts = V.data.filter(pt => String(pt.cluster_id) === String(sel));
+  const m = selPts.length;
+  const pos = new Float32Array(m * 3);
+  for (let i = 0; i < m; i++) {
+    pos[i*3] = selPts[i]._sx;
+    pos[i*3+1] = selPts[i]._sy;
+    pos[i*3+2] = selPts[i]._sz;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.computeBoundingSphere();
+
+  const mat = new THREE.PointsMaterial({
+    size: 0.7,
+    color: new THREE.Color('#ef4444'),
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 1.0,
+    depthTest: true,
+  });
+
+  if (V.pointsMeshSelected) {
+    V.scene.remove(V.pointsMeshSelected);
+    V.pointsMeshSelected.geometry.dispose();
+    V.pointsMeshSelected.material.dispose?.();
+  }
+  V.pointsMeshSelected = new THREE.Points(geo, mat);
+  V.scene.add(V.pointsMeshSelected);
 }
 
 // ── Right panel — group list ──────────────────────────────────────────────────
@@ -213,12 +266,15 @@ function buildVizGroupPanel() {
 
   listEl.innerHTML = ids.map(id => {
     const color = hexToStr(id);
-    const count = V.clustersMap[id].length;
+    const entry = V.clustersMap[id] || { group_name: `Group ${id}`, pts: [] };
+    const pts = entry.pts || [];
+    const count = pts.length;
+    const groupName = entry.group_name || `Group ${id}`;
     return `
       <div class="viz-gi" id="vgi-${id}" data-gid="${id}" onclick="selectVizGroup('${id}')">
         <div class="viz-gdot" style="background:${color}; box-shadow:0 0 6px ${color}66"></div>
         <div class="viz-gtext">
-          <div class="viz-gname">Group ${id}</div>
+          <div class="viz-gname">${escHtml(groupName)}</div>
           <div class="viz-gcount">${count} FAQ(s)</div>
         </div>
       </div>`;
@@ -230,7 +286,7 @@ window.selectVizGroup = function(id) {
   document.querySelectorAll('.viz-gi').forEach(el => {
     el.classList.toggle('active', el.dataset.gid === V.selectedGroup);
   });
-  refreshVizColors();
+  applyVizSelection();
   renderVizFAQDetail(V.selectedGroup);
 };
 
@@ -241,17 +297,19 @@ function renderVizFAQDetail(groupId) {
     panel.innerHTML = `<div class="viz-hint">← Click a group to see its FAQs here</div>`;
     return;
   }
-  const pts   = V.clustersMap[groupId] || [];
+  const entry = V.clustersMap[groupId] || { group_name: `Group ${groupId}`, pts: [] };
+  const pts   = entry.pts || [];
   const color = hexToStr(groupId);
+  const groupName = entry.group_name || `Group ${groupId}`;
   panel.innerHTML =
     `<div class="viz-panel-label" style="color:${color}">
-       Group ${groupId} &nbsp;·&nbsp; ${pts.length} FAQ(s)
+       ${escHtml(groupName)} &nbsp;·&nbsp; ${pts.length} FAQ(s)
      </div>` +
     pts.map(pt => `
       <div class="viz-faq-card">
         <div class="viz-faq-q">${escHtml(pt.faq_question)}</div>
         <div class="viz-faq-a">${escHtml((pt.faq_answer||'').substring(0,160))}${(pt.faq_answer||'').length>160?'…':''}</div>
-        <div class="viz-faq-meta">🗣️ ${pt.support_count} mentions</div>
+        <div class="viz-faq-meta">🗣️ ${pt.mention_count ?? 1} mentions</div>
       </div>`).join('');
 }
 
@@ -272,17 +330,15 @@ function onVizMouseMove(e) {
     if (pt) {
       V.hoveredIdx = idx;
       const color = hexToStr(pt.cluster_id);
+      const title = pt.faq_question || pt.group_name || `Group ${pt.cluster_id}`;
       tip.innerHTML = `
         <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">
-          Group ${pt.cluster_id}
-        </div>
-        <div style="font-size:12px;font-weight:600;line-height:1.4;color:#eef2ff;margin-bottom:5px">
-          ${escHtml(pt.faq_question)}
+          ${escHtml(title)}
         </div>
         <div style="font-size:11px;color:#8892a4;line-height:1.45">
-          ${escHtml((pt.faq_answer||'').substring(0,110))}${(pt.faq_answer||'').length>110?'…':''}
+          ${escHtml((pt.faq_answer||'').substring(0,140))}${(pt.faq_answer||'').length>140?'…':''}
         </div>
-        <div style="font-size:10px;color:#06b6d4;margin-top:6px">🗣️ ${pt.support_count} mentions</div>`;
+        <div style="font-size:10px;color:#06b6d4;margin-top:6px">🗣️ ${pt.mention_count ?? 1} mentions</div>`;
       tip.style.opacity = '1';
       tip.style.left = (e.clientX - rect.left + 16) + 'px';
       tip.style.top  = Math.max(0, e.clientY - rect.top - 14) + 'px';
@@ -322,6 +378,7 @@ function cleanupViz() {
   if (V.canvasEl) V.canvasEl.removeEventListener('mousemove', onVizMouseMove);
   window.removeEventListener('resize', onVizResize);
   if (V.pointsMesh) { V.pointsMesh.geometry.dispose(); V.pointsMesh = null; }
+  if (V.pointsMeshSelected) { V.pointsMeshSelected.geometry.dispose(); V.pointsMeshSelected = null; }
   if (V.renderer)   { V.renderer.dispose(); V.renderer = null; }
   V.scene = null; V.camera = null; V.controls = null;
   V.canvasEl = null; V.selectedGroup = null;

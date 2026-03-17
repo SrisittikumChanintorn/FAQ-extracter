@@ -20,8 +20,6 @@ DEFAULT_INPUT_FILE = os.path.join(DATA_DIR, "conversations.json")
 # Output files
 FAQ_OUTPUT_FILE = os.path.join(DATA_DIR, "faqs.json")
 ANALYTICS_OUTPUT_FILE = os.path.join(DATA_DIR, "analytics_report.json")
-EMBEDDINGS_CACHE_FILE = os.path.join(DATA_DIR, "embeddings_cache.npy")
-EMBEDDINGS_IDS_CACHE_FILE = os.path.join(DATA_DIR, "embeddings_ids_cache.npy")
 FAISS_INDEX_FILE = os.path.join(DATA_DIR, "faiss.index")
 FAISS_META_FILE = os.path.join(DATA_DIR, "faq_index_meta.json")
 
@@ -36,10 +34,6 @@ RAW_ADMIN_FIELD = "admin_reply"
 FIELD_QUESTION = "question"
 FIELD_ANSWER = "answer"
 FIELD_CLEAN_QUESTION = "clean_question"
-FIELD_CLUSTER_ID = "cluster_id"
-FIELD_IS_DUPLICATE = "is_duplicate"
-FIELD_CANONICAL_ID = "canonical_id"
-FIELD_DUPLICATE_COUNT = "duplicate_count"
 
 # ─────────────────────────────────────────────
 # STAGE 2 — TEXT CLEANING
@@ -114,73 +108,36 @@ EMBEDDING_QUERY_PREFIX = "Represent this sentence for searching relevant passage
 EMBEDDING_PASSAGE_PREFIX = ""         # bge-m3 passages need no prefix
 
 # ─────────────────────────────────────────────
-# STAGE 4.5 — UMAP DIMENSIONALITY REDUCTION
+# LLM BATCH FAQ EXTRACTION + GROUPS
 # ─────────────────────────────────────────────
-UMAP_N_COMPONENTS = 8          # Target dimensionality (5–15 works well for HDBSCAN)
-UMAP_N_NEIGHBORS = 15          # Controls local vs global structure balance
-UMAP_MIN_DIST = 0.0            # 0.0 = tighter clusters (better for HDBSCAN)
-UMAP_METRIC = "cosine"         # Use cosine on high-dim embeddings
-UMAP_RANDOM_STATE = 42
-UMAP_CACHE_FILE = os.path.join(DATA_DIR, "umap_reduced_cache.npy")
-UMAP_PARAMS_CACHE_FILE = os.path.join(DATA_DIR, "umap_params_cache.json")
+# Number of data splits (fewer = faster test runs; increase for production).
+FAQ_N_SPLITS = 3
+# Conversations per LLM call (micro-batch). Smaller = faster per call.
+FAQ_EXTRACTION_BATCH_SIZE = 5
+# Max FAQ pairs to extract per micro-batch (lower = faster LLM response).
+FAQ_PER_BATCH = 8
+# Max tokens for LLM response (lower = faster).
+FAQ_EXTRACTION_NUM_PREDICT = 1200
+# When merging batches: question similarity above this → same FAQ (merge mention_count).
+MERGE_QUESTION_SIMILARITY_THRESHOLD = 0.88
+# When merging batches: group name match (string or embedding similarity) min ratio.
+MERGE_GROUP_NAME_MIN_SIMILARITY = 0.7
+# Use embedding similarity for group names (more accurate for Thai synonyms).
+MERGE_GROUP_USE_EMBEDDING = True
 
-# ─────────────────────────────────────────────
-# STAGE 3.5 — LLM BATCH FAQ EXTRACTION
-# ─────────────────────────────────────────────
-# How many conversations to send to Ollama per LLM call.
-# Lower = more focused extraction; Higher = fewer API calls.
-FAQ_EXTRACTION_BATCH_SIZE = 10
-# Max FAQ pairs to extract per batch (LLM is instructed to return at most this many).
-FAQ_PER_BATCH = 5
-# Max tokens for the LLM to produce (JSON output needs more room than naming).
-FAQ_EXTRACTION_NUM_PREDICT = 800
-# Cosine similarity above which two extracted FAQ questions are considered duplicates.
-# More relaxed than raw-question dedup (0.99) because extraction already canonicalises.
-FAQ_DEDUP_SIMILARITY_THRESHOLD = 0.80
-
-# ─────────────────────────────────────────────
-# STAGE 5 — SEMANTIC DEDUPLICATION (of extracted FAQs)
-# ─────────────────────────────────────────────
-DEDUP_SIMILARITY_THRESHOLD = 0.95   # Near-exact match cutoff in embedding space
-DEDUP_CHUNK_SIZE = 5000             # Process dedup in chunks for large datasets
-
-# ─────────────────────────────────────────────
-# STAGE 6 — CLUSTERING (HDBSCAN on UMAP output)
-# ─────────────────────────────────────────────
-CLUSTER_MIN_CLUSTER_SIZE = 2        # Minimum points to form a cluster
-CLUSTER_MIN_SAMPLES = 2             # Controls how conservative HDBSCAN is
-CLUSTER_METRIC = "euclidean"        # Euclidean on UMAP-reduced space
-CLUSTER_SELECTION_METHOD = "eom"    # "eom" or "leaf"
-
-# ─────────────────────────────────────────────
-# STAGE 7 — CLUSTER QUALITY FILTERING
-# ─────────────────────────────────────────────
-CLUSTER_MIN_SIZE_THRESHOLD = 2      # Clusters smaller than this are discarded
-CLUSTER_MAX_INTRA_DISTANCE = 2.0    # Max avg pairwise L2 distance in UMAP space
-
-# ─────────────────────────────────────────────
-# STAGE 8 — LLM TOPIC NAMING
-# ─────────────────────────────────────────────
-# Provider: "ollama" | "mock" | "openai" | "anthropic" | "gemini"
-TOPIC_NAMER_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")
-TOPIC_NAMER_API_KEY = os.environ.get("LLM_API_KEY", "")           # Not needed for Ollama
+# LLM (Ollama) for batch extract + group naming
 TOPIC_NAMER_MODEL = os.environ.get("LLM_MODEL", "scb10x/llama3.1-typhoon2-8b-instruct")
 TOPIC_NAMER_OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-_timeout_env = os.environ.get("OLLAMA_TIMEOUT", "10800")
-OLLAMA_TIMEOUT = None if _timeout_env.strip().lower() == "none" else int(_timeout_env)
-TOPIC_SAMPLE_SIZE = 2               # How many questions to sample per cluster
-TOPIC_MAX_TOKENS = 100               # LLM max tokens / num_predict for category name
+# CPU runs slowly: use no timeout by default (OLLAMA_TIMEOUT=none). Set e.g. 3600 for 1h limit.
+_timeout_env = os.environ.get("OLLAMA_TIMEOUT", "none")
+OLLAMA_TIMEOUT = None if (not _timeout_env or str(_timeout_env).strip().lower() == "none") else int(_timeout_env)
+OLLAMA_RETRY_COUNT = int(os.environ.get("OLLAMA_RETRY_COUNT", "3"))   # retries per LLM call
+OLLAMA_RETRY_DELAY_SEC = float(os.environ.get("OLLAMA_RETRY_DELAY_SEC", "10.0"))  # delay between retries
+
+REPRESENTATIVE_Q_COUNT = 5          # Questions per group used for search index
 
 # ─────────────────────────────────────────────
-# STAGE 10 — REPRESENTATIVE QUESTIONS
-# ─────────────────────────────────────────────
-REPRESENTATIVE_Q_COUNT = 5          # Representative questions to surface per group
-
-ANSWER_SIMILARITY_THRESHOLD = 0.70  # If max answer similarity < this → summarize
-ANSWER_MIN_LENGTH = 5               # Minimum answer length in characters
-
-# ─────────────────────────────────────────────
-# STAGE 11 — FAISS SEARCH INDEX
+# FAISS SEARCH INDEX
 # ─────────────────────────────────────────────
 FAISS_TOP_K_DEFAULT = 5             # Default number of results per query
 FAISS_USE_GPU = False               # Set True if faiss-gpu is installed
