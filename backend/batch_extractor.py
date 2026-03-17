@@ -83,12 +83,12 @@ _EXTRACT_AND_GROUP_SYSTEM = """You are an expert at extracting FAQs from custome
 
 Your task:
 1) Extract only real question–answer pairs that appear in the conversations (frequent or useful as FAQs).
-2) Assign each pair into an appropriate topic group. The group_name must be short (3–5 words) and in English, e.g. "Login issues", "Account verification".
+2) Assign each pair into an appropriate topic group. The group_name must be short (3–5 words) and primarily in Thai, e.g. "ปัญหาการเข้าสู่ระบบ", "การยืนยันตัวตน". English words or numbers are allowed ONLY for proper nouns or technical terms that have no common Thai equivalent (e.g. "MT5", "Options", "Futures", "DCA").
 3) Questions should be neutral and generic (no personal names).
 4) Answers must come from what the admin/agent actually replied. If the exchange is not a clear Q&A, skip it.
 
 Return ONLY a JSON array (no extra text):
-[{"group_name":"Category name","faqs":[{"question":"...","answer":"..."}]}]"""
+[{"group_name":"ชื่อหมวดหมู่","faqs":[{"question":"...","answer":"..."}]}]"""
 
 
 def _format_conversations(rows: list[dict]) -> str:
@@ -179,9 +179,9 @@ def _call_llm_extract_and_group(conversations: list[dict]) -> list[dict]:
     text = _format_conversations(conversations)
     user = (
         f"From the following conversations, extract up to {FAQ_PER_BATCH} useful FAQ Q&A pairs "
-        f"and organize them into short English topic groups.\n\n{text}\n\n"
+        f"and organize them into topic groups with Thai group names (English/numbers OK for technical terms only).\n\n{text}\n\n"
         "Return ONLY a JSON array of groups: "
-        "[{\"group_name\":\"...\",\"faqs\":[{\"question\":\"...\",\"answer\":\"...\"}]}]"
+        "[{\"group_name\":\"ชื่อหมวดหมู่\",\"faqs\":[{\"question\":\"...\",\"answer\":\"...\"}]}]"
     )
     prompt = f"[INST] <<SYS>>\n{_EXTRACT_AND_GROUP_SYSTEM}\n<</SYS>>\n\n{user} [/INST]"
 

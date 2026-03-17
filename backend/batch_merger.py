@@ -59,7 +59,7 @@ def _merge_into_existing_exact(merged: list[dict], incoming: dict) -> bool:
 
 
 def _normalize_name(s: str) -> str:
-    return (s or "").strip().replace(" ", "").replace("　", "")
+    return (s or "").strip().replace(" ", "").replace("\u3000", "").casefold()
 
 
 def _group_name_similarity(a: str, b: str) -> float:
@@ -243,9 +243,47 @@ def merge_two_batch_results(
     return out
 
 
+def _final_dedup_faqs(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Final pass: within each group, collapse FAQ items whose questions
+    differ only in case, whitespace, or leading/trailing punctuation.
+    Keeps the entry with the higher mention_count (ties: longer answer wins).
+    """
+    for g in groups:
+        faqs = g.get("faqs", [])
+        if len(faqs) <= 1:
+            continue
+        seen: dict[str, int] = {}  # normalized_key → index in deduped
+        deduped: list[dict] = []
+        for faq in faqs:
+            key = _normalize_question_key(faq.get("question", ""))
+            if not key:
+                deduped.append(faq)
+                continue
+            if key in seen:
+                existing = deduped[seen[key]]
+                cnt = faq.get("mention_count", 1)
+                before_cnt = existing.get("mention_count", 1)
+                existing["answer"] = _pick_better_answer(
+                    {"answer": existing.get("answer", ""), "mention_count": before_cnt},
+                    faq,
+                )
+                existing["mention_count"] = before_cnt + cnt
+            else:
+                seen[key] = len(deduped)
+                deduped.append(dict(faq))
+        if len(deduped) < len(faqs):
+            logger.info(
+                f"  Dedup group '{g.get('group_name', '?')}': {len(faqs)} → {len(deduped)} FAQs"
+            )
+        g["faqs"] = deduped
+    return groups
+
+
 def merge_all_batch_results(batch_results: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """
-    Repeatedly merge pairs (1+2, 3+4, ...) until one final list of groups.
+    Repeatedly merge pairs (1+2, 3+4, ...) until one final list of groups,
+    then run a final dedup pass to collapse case/whitespace-only differences.
     """
     if not batch_results:
         return []
@@ -260,4 +298,6 @@ def merge_all_batch_results(batch_results: list[list[dict[str, Any]]]) -> list[d
                 next_list.append(current[i])
         current = next_list
         logger.info(f"Merge round complete: {len(current)} batch(es) remaining.")
-    return current[0] if current else []
+    result = current[0] if current else []
+    result = _final_dedup_faqs(result)
+    return result

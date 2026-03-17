@@ -331,32 +331,30 @@ async function renderAnalyticsRawTable() {
   if (!tbody) return;
   if (thead) thead.innerHTML = `<tr><th style="width:45%">Question</th><th>Answer</th></tr>`;
   try {
-    let displayData = [];
-    if (!state.manipulateData) {
-      try {
-        const res = await apiFetch('/uploaded-data');
-        state.manipulateData = res.data || [];
-      } catch (_) {
-        state.manipulateData = [];
-      }
-    }
-    if (state.manipulateData && state.manipulateData.length) {
-      displayData = state.manipulateData.map(row => ({
+    let conversationData = [];
+    let isSample = false;
+    try {
+      const res = await apiFetch('/uploaded-data');
+      isSample = !!res.is_sample;
+      conversationData = (res.data || []).map(row => ({
         question: row.customer_message || row.question || '',
         answer: row.admin_reply || row.answer || ''
       }));
-    } else if (state.faqs && state.faqs.length) {
-      state.faqs.forEach(g => {
-        (g.faqs || []).forEach(f => {
-          displayData.push({ question: f.question || '', answer: f.answer || '' });
-        });
-      });
+    } catch (_) {
+      conversationData = [];
     }
-    if (!displayData.length) {
-      tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-muted);padding:20px;">No data available. Upload a file or run analysis first.</td></tr>';
+    if (!conversationData.length) {
+      tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--text-muted);padding:20px;">No conversation data available.</td></tr>';
       return;
     }
-    tbody.innerHTML = displayData.slice(0, 200).map(row => {
+    if (isSample) {
+      const banner = document.createElement('div');
+      banner.textContent = 'Displaying pre-loaded sample data. Upload your own file for custom analysis.';
+      banner.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);background:rgba(100,100,120,0.92);color:#ccc;padding:10px 24px;border-radius:8px;font-size:13px;z-index:3000;backdrop-filter:blur(6px);box-shadow:0 4px 16px rgba(0,0,0,0.4);pointer-events:none;opacity:1;transition:opacity 0.5s;';
+      document.body.appendChild(banner);
+      setTimeout(() => { banner.style.opacity = '0'; setTimeout(() => banner.remove(), 600); }, 5000);
+    }
+    tbody.innerHTML = conversationData.map(row => {
       const q = String(row.question).substring(0, 150);
       const a = String(row.answer).substring(0, 150);
       return `<tr><td><div style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(q)}">${escHtml(q)}</div></td><td><div style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(a)}">${escHtml(a)}</div></td></tr>`;

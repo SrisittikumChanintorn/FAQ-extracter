@@ -150,7 +150,7 @@ http://localhost:8000
 ## 🔄 Subsequent Runs (Already Set Up)
 
 ```powershell
-$env:LLM_MODEL = "hf.co/scb10x/typhoon-v1.5-8b-instruct-gguf:Q4_K_M"
+$env:LLM_MODEL = "scb10x/llama3.1-typhoon2-8b-instruct"
 python backend/main.py --input data/conversations.json --serve
 ```
 
@@ -262,6 +262,7 @@ customer_message,admin_reply
 ```
 context_extract/
 ├── backend/
+│   ├── __init__.py            ← Package marker
 │   ├── config.py              ← All settings (edit this)
 │   ├── main.py                ← Pipeline orchestrator
 │   ├── api.py                 ← FastAPI REST + frontend
@@ -270,20 +271,28 @@ context_extract/
 │   ├── question_filter.py     ← Stage 3: Filter Q&A
 │   ├── batch_extractor.py     ← Stage 4: LLM batch extraction + groups
 │   ├── batch_merger.py        ← Stage 5: Merge batches (embedding + best answer)
-│   ├── embedding_service.py   ← Stage 4: bge-m3 (1024-dim)
+│   ├── embedding_service.py   ← bge-m3 embeddings (1024-dim)
 │   ├── search_index.py        ← Stage 6: FAISS
 │   └── analytics.py           ← Reports
 ├── frontend/
 │   ├── index.html             ← Single-page app UI
-│   ├── manual.html            ← User manual (this guide in Thai)
-│   └── app.js                 ← UI logic
+│   ├── manual.html            ← User manual (Thai)
+│   ├── app.js                 ← UI logic
+│   ├── search_ui.js           ← Search interface logic
+│   ├── viz.js                 ← 3D cluster visualization
+│   ├── terms.html             ← Terms of service page
+│   └── privacy.html           ← Privacy policy page
 ├── data/
 │   ├── conversations.json     ← Sample dataset
-│   ├── uploads/               ← Uploaded files
+│   ├── uploads/               ← Uploaded files (auto-created)
 │   └── faqs.json              ← Output (auto-generated)
+├── .gitignore
 ├── requirements.txt
+├── generate_mock_data.py      ← Generate sample conversations
+├── test_api.py                ← API integration tests
 ├── Dockerfile
-└── docker-compose.yml
+├── docker-compose.yml
+└── README.md
 ```
 
 ---
@@ -292,18 +301,51 @@ context_extract/
 
 Base URL: `http://localhost:8000` | Swagger: `/docs`
 
+### System
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/health` | Liveness check (status, faq_count, index_ready, pipeline_status) |
+| GET | `/manual` | Serve user manual page |
+
+### Pipeline
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/upload` | Upload data file (xlsx / csv / json) |
+| POST | `/preview-data` | Read uploaded file headers + top 5 sample rows for column mapping |
+| POST | `/apply-mapping` | Map customer/admin columns, save as normalized JSON |
+| POST | `/run-pipeline` | Trigger FAQ mining pipeline in background |
+| GET | `/pipeline-status` | Poll pipeline progress (stage, logs, elapsed) |
+
+### FAQs
+
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/groups` | **Primary** — all FAQ groups with Q&A lists |
-| GET | `/faqs` | Legacy alias for `/groups` |
-| POST | `/search` | Semantic search: `{"query": "..."}` |
+| GET | `/faqs` | Legacy alias (same data, different envelope) |
+| POST | `/faqs/edit` | Edit question/answer text of a specific FAQ |
+| POST | `/faqs/relabel` | Move FAQ(s) to a different group |
+| POST | `/faqs/delete` | Delete FAQ(s) by index |
+| POST | `/faqs/merge-groups` | Merge source group into target group |
+
+### Search
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/search` | Semantic FAQ search: `{"query": "...", "top_k": 5}` |
+| POST | `/similar_questions` | Historical question similarity search |
+
+### Data & Analytics
+
+| Method | Endpoint | Description |
+|---|---|---|
 | GET | `/analytics` | Statistics report |
-| GET | `/pipeline-status` | Poll pipeline progress |
-| POST | `/upload` | Upload data file |
-| POST | `/run-pipeline` | Trigger analysis |
-| POST | `/faqs/relabel` | Move FAQ to different group |
-| POST | `/faqs/delete` | Delete FAQ |
-| GET | `/manual` | This user manual |
+| GET | `/clusters` | Cluster metadata list |
+| GET | `/visualization-data` | 3D PCA projection for interactive cluster visualization |
+| GET | `/uploaded-data` | Fetch most recently uploaded raw data |
+| POST | `/save-uploaded-data` | Save frontend-edited data back for pipeline |
+| GET | `/export?fmt=json` | Export all FAQs as JSON (or `fmt=csv` for CSV) |
 
 ---
 
@@ -311,7 +353,7 @@ Base URL: `http://localhost:8000` | Swagger: `/docs`
 
 ```powershell
 # Run pipeline + start server
-$env:LLM_MODEL = "hf.co/scb10x/typhoon-v1.5-8b-instruct-gguf:Q4_K_M"
+$env:LLM_MODEL = "scb10x/llama3.1-typhoon2-8b-instruct"
 python backend/main.py --input data/conversations.json --serve
 
 # Pipeline only (no server)
@@ -325,6 +367,16 @@ python backend/main.py --input data/conversations.json --serve
 ---
 
 ## Docker Deployment
+
+### Option A — docker-compose (recommended)
+
+```powershell
+docker-compose up -d --build
+```
+
+> Edit `docker-compose.yml` to set `LLM_MODEL` and `OLLAMA_URL` if needed.
+
+### Option B — manual docker run
 
 ```powershell
 docker build -t faq-miner-ai .

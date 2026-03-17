@@ -9,5 +9,9 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - PYTHONUNBUFFERED=1
+      - LLM_MODEL=scb10x/llama3.1-typhoon2-8b-instruct
+      - OLLAMA_URL=http://host.docker.internal:11434/api/generate

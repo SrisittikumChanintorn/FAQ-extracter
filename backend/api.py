@@ -70,10 +70,45 @@ _valid_embeddings: np.ndarray = np.empty((0,))
 
 # ── Helpers (data normalization) ──────────────────────────────────────────────
 
+def _normalize_question_key(text: str) -> str:
+    """Normalize a question to a stable key for dedup (case-fold, collapse whitespace, strip edge punct)."""
+    import re as _re
+    import unicodedata as _ud
+    s = _ud.normalize("NFKC", (text or ""))
+    s = _re.sub(r"\s+", " ", s).strip()
+    s = _re.sub(r"^[\s\W_]+|[\s\W_]+$", "", s, flags=_re.UNICODE).strip()
+    return s.casefold()
+
+
+def _dedup_faqs_in_group(faqs: list[dict]) -> list[dict]:
+    """Collapse FAQ items whose questions differ only in case / whitespace."""
+    if len(faqs) <= 1:
+        return faqs
+    seen: dict[str, int] = {}
+    deduped: list[dict] = []
+    for faq in faqs:
+        if not isinstance(faq, dict):
+            continue
+        key = _normalize_question_key(faq.get("question", ""))
+        if not key:
+            deduped.append(faq)
+            continue
+        if key in seen:
+            existing = deduped[seen[key]]
+            cnt = int(faq.get("mention_count", 1) or 1)
+            existing["mention_count"] = int(existing.get("mention_count", 1) or 1) + cnt
+            if len((faq.get("answer") or "").strip()) > len((existing.get("answer") or "").strip()):
+                existing["answer"] = faq["answer"]
+        else:
+            seen[key] = len(deduped)
+            deduped.append(faq)
+    return deduped
+
+
 def _normalize_groups_in_place(groups: list[dict]) -> list[dict]:
     """
     Ensure groups have stable, unique group_id/cluster_id and expected fields.
-    This prevents UI issues when legacy files contain duplicate or missing IDs.
+    Also deduplicates FAQs within each group that differ only in case/whitespace.
     """
     if not groups:
         return []
@@ -86,9 +121,10 @@ def _normalize_groups_in_place(groups: list[dict]) -> list[dict]:
         faqs = g.get("faqs", [])
         if not isinstance(faqs, list):
             faqs = []
+        faqs = _dedup_faqs_in_group(faqs)
         g["faqs"] = faqs
-        g["total_faqs"] = int(g.get("total_faqs", len(faqs)) or len(faqs))
-        g["total_questions"] = int(g.get("total_questions", g["total_faqs"]) or g["total_faqs"])
+        g["total_faqs"] = len(faqs)
+        g["total_questions"] = len(faqs)
         if "support_count" not in g or g.get("support_count") is None:
             g["support_count"] = sum(int(f.get("mention_count", 1) or 1) for f in faqs if isinstance(f, dict))
     return groups
@@ -430,29 +466,33 @@ def create_app() -> FastAPI:
     @app.get("/uploaded-data", tags=["Data Manipulation"])
     async def get_uploaded_data():
         """Fetch the most recently uploaded raw data for frontend manipulation."""
-        # Check mapped file first, then raw uploads
-        candidates = [
+        uploaded_candidates = [
             os.path.join(UPLOAD_DIR, "input_mapped.json"),
             os.path.join(UPLOAD_DIR, "input.json"),
             os.path.join(UPLOAD_DIR, "input.csv"),
             os.path.join(UPLOAD_DIR, "input.xlsx"),
-            os.path.join(UPLOAD_DIR, "input.xls")
+            os.path.join(UPLOAD_DIR, "input.xls"),
         ]
         
         target_file = None
-        for cand in candidates:
+        is_sample = False
+        for cand in uploaded_candidates:
             if os.path.isfile(cand):
                 target_file = cand
                 break
-                
+        
         if not target_file:
-            raise HTTPException(404, "No uploaded data found.")
+            if os.path.isfile(DEFAULT_INPUT_FILE):
+                target_file = DEFAULT_INPUT_FILE
+                is_sample = True
+            else:
+                raise HTTPException(404, "No uploaded data found.")
             
         try:
             from backend.data_loader import load_support_data
             df = load_support_data(target_file, validate=False)
             df.fillna("", inplace=True)
-            return {"data": df.to_dict(orient="records")}
+            return {"data": df.to_dict(orient="records"), "is_sample": is_sample}
         except Exception as e:
             logger.error(f"Failed to load uploaded data: {e}")
             raise HTTPException(500, f"Failed to load uploaded data: {e}")
