@@ -1013,11 +1013,9 @@ function resetSearchUI() {
 // ── Data Manipulation ─────────────────────────────────────────────────────────
 
 async function loadRawData() {
-  const container = document.getElementById('manipulateContainer');
   const empty = document.getElementById('manipulateEmpty');
   const tableWrap = document.getElementById('manipulateTableWrapper');
-  const thead = document.getElementById('manipulateHead');
-  const tbody = document.getElementById('manipulateBody');
+  const countEl = document.getElementById('manipulateCount');
 
   try {
     empty.style.display = 'block';
@@ -1027,58 +1025,120 @@ async function loadRawData() {
     const res = await apiFetch('/uploaded-data');
     if (!res.data || res.data.length === 0) {
       empty.innerHTML = 'No uploaded data found.';
+      if (countEl) countEl.textContent = '';
       return;
     }
 
-    state.manipulateData = res.data; // Store locally
-    
-    // Extract headers from first object
-    const headers = Object.keys(res.data[0]);
-    if (headers.length === 0) {
-      empty.innerHTML = 'Data has no columns.';
-      return;
-    }
-
-    // Render Headers
-    thead.innerHTML = `<tr>${headers.map(h => `<th>${escHtml(h)}</th>`).join('')}</tr>`;
-
-    // Render Body (contenteditable)
-    let html = '';
-    // Limit to 500 rows to prevent extreme browser lag on huge datasets
-    const maxRows = Math.min(res.data.length, 500); 
-    for(let i=0; i<maxRows; i++) {
-        const rowObj = res.data[i];
-        html += `<tr data-idx="${i}">`;
-        headers.forEach(h => {
-             // Null/undefined safety
-             const val = rowObj[h] !== null && rowObj[h] !== undefined ? rowObj[h] : ""; 
-             html += `<td contenteditable="true" data-col="${escHtml(h)}" onblur="updateManipulateCell(this)" style="outline:none;background:rgba(255,255,255,0.01)">${escHtml(String(val))}</td>`;
-        });
-        html += `</tr>`;
-    }
-    
-    tbody.innerHTML = html;
-    empty.style.display = 'none';
-    tableWrap.style.display = 'block';
-    
-    if(res.data.length > 500) {
-        showToast('Viewing top 500 rows for performance. Full file will be saved.', 'info');
-    }
+    state.manipulateData = res.data;
+    state.manipulateHeaders = Object.keys(res.data[0]);
+    renderManipulateTable();
   } catch (err) {
     empty.innerHTML = 'No uploaded data found.';
     tableWrap.style.display = 'none';
+    if (countEl) countEl.textContent = '';
   }
 }
 
-function updateManipulateCell(td) {
-  const tr = td.parentElement;
-  const idx = parseInt(tr.getAttribute('data-idx'), 10);
-  const col = td.getAttribute('data-col');
-  if(!isNaN(idx) && state.manipulateData && state.manipulateData[idx]) {
-      // Decode entities since innerText or innerHTML will have escaped values
-      const val = td.innerText; 
-      state.manipulateData[idx][col] = val;
+function renderManipulateTable() {
+  const empty = document.getElementById('manipulateEmpty');
+  const tableWrap = document.getElementById('manipulateTableWrapper');
+  const thead = document.getElementById('manipulateHead');
+  const tbody = document.getElementById('manipulateBody');
+  const countEl = document.getElementById('manipulateCount');
+  const data = state.manipulateData || [];
+  const headers = state.manipulateHeaders || [];
+
+  if (!data.length || !headers.length) {
+    empty.style.display = 'block';
+    empty.innerHTML = 'No data.';
+    tableWrap.style.display = 'none';
+    if (countEl) countEl.textContent = '';
+    return;
   }
+
+  if (countEl) countEl.textContent = `${data.length} rows`;
+  thead.innerHTML = `<tr><th style="width:50px">#</th>${headers.map(h => `<th>${escHtml(h)}</th>`).join('')}<th style="width:100px;text-align:center;">Actions</th></tr>`;
+
+  const maxRows = Math.min(data.length, 500);
+  let html = '';
+  for (let i = 0; i < maxRows; i++) {
+    const rowObj = data[i];
+    html += `<tr data-idx="${i}">`;
+    html += `<td style="color:var(--text-muted);font-size:11px;text-align:center;">${i + 1}</td>`;
+    headers.forEach(h => {
+      const val = rowObj[h] !== null && rowObj[h] !== undefined ? rowObj[h] : '';
+      html += `<td><div style="max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(String(val))}">${escHtml(String(val))}</div></td>`;
+    });
+    html += `<td style="text-align:center;white-space:nowrap;">
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;" onclick="event.stopPropagation();openEditRowModal(${i})">✏️ Edit</button>
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;color:var(--danger);" onclick="event.stopPropagation();deleteManipulateRow(${i})">🗑</button>
+    </td>`;
+    html += `</tr>`;
+  }
+
+  tbody.innerHTML = html;
+  empty.style.display = 'none';
+  tableWrap.style.display = 'block';
+
+  if (data.length > 500) {
+    showToast('Viewing top 500 rows for performance. Full file will be saved.', 'info');
+  }
+}
+
+// ── Edit Row Modal ─────────────────────────────────────────────────────────────
+let editingRowIndex = -1;
+
+function openEditRowModal(idx) {
+  editingRowIndex = idx;
+  const row = state.manipulateData[idx];
+  if (!row) return;
+  const headers = state.manipulateHeaders || Object.keys(row);
+  document.getElementById('editRowIndex').textContent = `#${idx + 1}`;
+  const container = document.getElementById('editRowFields');
+  container.innerHTML = headers.map(h => {
+    const val = row[h] !== null && row[h] !== undefined ? String(row[h]) : '';
+    return `<div>
+      <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text-secondary);">${escHtml(h)}</label>
+      <textarea id="editRow_${escHtml(h)}" style="width:100%;min-height:80px;background:var(--bg-secondary);border:1px solid var(--border);color:white;padding:10px;border-radius:6px;font-family:'Inter',sans-serif;font-size:13px;resize:vertical;">${escHtml(val)}</textarea>
+    </div>`;
+  }).join('');
+  document.getElementById('editRowModal').classList.add('visible');
+}
+
+function closeEditRowModal() {
+  document.getElementById('editRowModal').classList.remove('visible');
+  editingRowIndex = -1;
+}
+
+function saveEditRow() {
+  if (editingRowIndex < 0 || !state.manipulateData[editingRowIndex]) return;
+  const headers = state.manipulateHeaders || Object.keys(state.manipulateData[editingRowIndex]);
+  headers.forEach(h => {
+    const el = document.getElementById(`editRow_${h}`);
+    if (el) state.manipulateData[editingRowIndex][h] = el.value;
+  });
+  renderManipulateTable();
+  closeEditRowModal();
+  showToast(`Row #${editingRowIndex + 1} updated (click Save Changes to persist).`, 'success');
+}
+
+function deleteManipulateRow(idx) {
+  if (!state.manipulateData || idx < 0 || idx >= state.manipulateData.length) return;
+  if (!confirm(`Delete row #${idx + 1}?`)) return;
+  state.manipulateData.splice(idx, 1);
+  renderManipulateTable();
+  showToast(`Row deleted (click Save Changes to persist).`, 'info');
+}
+
+function addManipulateRow() {
+  if (!state.manipulateData) state.manipulateData = [];
+  const headers = state.manipulateHeaders || (state.manipulateData.length ? Object.keys(state.manipulateData[0]) : ['customer_message', 'admin_reply']);
+  if (!state.manipulateHeaders) state.manipulateHeaders = headers;
+  const newRow = {};
+  headers.forEach(h => newRow[h] = '');
+  state.manipulateData.unshift(newRow);
+  renderManipulateTable();
+  openEditRowModal(0);
 }
 
 async function saveRawData() {
