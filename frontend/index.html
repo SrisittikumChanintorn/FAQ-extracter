@@ -125,7 +125,7 @@
     input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent-1);box-shadow:0 0 6px rgba(99,102,241,.5);}
     .input-file-row{display:flex;align-items:center;gap:10px;background:var(--bg-glass);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;color:var(--text-secondary);margin-bottom:18px;}
     .pipeline-run-btn{width:100%;justify-content:center;padding:13px;font-size:15px;border-radius:var(--radius-md);}
-    .log-terminal{background:#030712;border:1px solid rgba(255,255,255,.07);border-radius:var(--radius-md);padding:16px;font-family:'Courier New',monospace;font-size:12px;color:#a0aec0;min-height:420px;height:100%;flex:1;overflow-y:auto;line-height:1.7;}
+    .log-terminal{background:#030712;border:1px solid rgba(255,255,255,.07);border-radius:var(--radius-md);padding:16px;font-family:'Courier New',monospace;font-size:12px;color:#a0aec0;height:500px;overflow-y:auto;line-height:1.7;}
     .log-terminal .log-success{color:#10b981;}
     .log-terminal .log-error{color:#ef4444;}
     .log-terminal .log-stage{color:#6366f1;font-weight:700;}
@@ -331,7 +331,7 @@
     </div>
     <nav>
       <div class="nav-section">Input & Processing</div>
-      <div class="nav-item" id="nav-upload" onclick="switchPage('upload',this)">
+      <div class="nav-item active" id="nav-upload" onclick="switchPage('upload',this)">
         <span class="n-icon">📂</span> Upload Data
       </div>
       <div class="nav-item" id="nav-manipulate" onclick="switchPage('manipulate',this)">
@@ -341,7 +341,7 @@
         <span class="n-icon">⚙️</span> Process &amp; Analyze
       </div>
       <div class="nav-section">Results</div>
-      <div class="nav-item active" id="nav-faqs" onclick="switchPage('faqs',this)">
+      <div class="nav-item" id="nav-faqs" onclick="switchPage('faqs',this)">
         <span class="n-icon">❓</span> FAQ Library
         <span class="nav-badge" id="badge-faqs">0</span>
       </div>
@@ -374,16 +374,15 @@
   <div class="main">
     <div class="topbar">
       <div class="topbar-left">
-        <h1 id="pageTitle">FAQ Library</h1>
-        <p id="pageSubtitle">Browse and explore your extracted FAQ library</p>
+        <h1 id="pageTitle">Upload Data</h1>
+        <p id="pageSubtitle">Accepted formats: Excel, CSV, JSON</p>
       </div>
       <div class="topbar-right"></div>
     </div>
 
     <div class="content">
 
-      <!-- Upload Page -->
-      <div class="page" id="page-upload">
+      <div class="page active" id="page-upload">
         <div class="upload-wrapper">
           <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
             <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.json" />
@@ -412,6 +411,25 @@
             <div style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);border-radius:var(--radius-md);padding:16px 20px;">
               <div style="font-size:14px;font-weight:600;color:var(--success);margin-bottom:4px;">✅ File uploaded successfully!</div>
               <div style="font-size:12px;color:var(--text-secondary);" id="uploadSuccessMsg"></div>
+            </div>
+          </div>
+
+          <!-- Mockup Data Section -->
+          <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border);">
+            <div style="display:flex;align-items:center;gap:14px;">
+              <div style="flex:1;">
+                <div style="font-size:14px;font-weight:700;color:var(--accent-3);margin-bottom:4px;">🧪 Quick Start with Mockup Data</div>
+                <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">Load pre-built sample data (Thai investment Q&amp;A) for testing. This only imports data — no analysis will run.</div>
+              </div>
+              <button class="btn btn-ghost" id="mockupBtn" onclick="loadMockupData()" style="padding:10px 20px;border:1px solid rgba(168,85,247,.3);background:rgba(168,85,247,.08);color:#a855f7;white-space:nowrap;">
+                🧪 Load Mockup Data
+              </button>
+            </div>
+            <div id="mockupSuccess" style="display:none;margin-top:12px;">
+              <div style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.25);border-radius:var(--radius-md);padding:12px 16px;">
+                <div style="font-size:13px;font-weight:600;color:#a855f7;">✅ Mockup data loaded!</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;" id="mockupSuccessMsg"></div>
+              </div>
             </div>
           </div>
 
@@ -505,9 +523,31 @@ admin_reply</pre>
               <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 16px;">
                 The system runs in fully unsupervised mode. AI extracts FAQ pairs from your conversations and groups them by topic. Use the last uploaded (or mapped) file, or the built-in sample if none is set.
               </p>
+
+              <!-- Batch Parameter Controls -->
+              <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px;padding:14px;background:var(--bg-glass);border:1px solid var(--border);border-radius:var(--radius-sm);">
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:2px;">Pipeline Parameters</div>
+                <div class="config-row">
+                  <div class="config-label">
+                    <span>Number of Splits</span>
+                    <span class="config-value" id="splitsValue">Auto</span>
+                  </div>
+                  <input type="range" id="splitsSlider" min="0" max="15" value="0" oninput="updateSplitsLabel(this.value)" />
+                  <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">0 = Auto (based on row count)</div>
+                </div>
+                <div class="config-row">
+                  <div class="config-label">
+                    <span>Rows per Batch</span>
+                    <span class="config-value" id="batchValue">Auto</span>
+                  </div>
+                  <input type="range" id="batchSlider" min="0" max="20" value="0" oninput="updateBatchLabel(this.value)" />
+                  <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">0 = Auto (based on row count)</div>
+                </div>
+              </div>
+
               <div style="margin-top:auto;">
               <button class="btn btn-success pipeline-run-btn" id="runBtn" onclick="runPipeline()">
-                ▶ Start Analysis
+                ▶ Run Pipeline
               </button>
               <button class="btn btn-ghost" id="stopBtn" style="width:100%;justify-content:center;margin-top:8px;display:none;" disabled>
                 ⏹ Cannot stop while running
@@ -544,7 +584,7 @@ admin_reply</pre>
       </div>
 
       <!-- FAQ Library Page -->
-      <div class="page active" id="page-faqs">
+      <div class="page" id="page-faqs">
         <div class="faq-controls">
           <select class="faq-filter-select" id="clusterFilter" onchange="filterFAQs()">
             <option value="">All groups</option>

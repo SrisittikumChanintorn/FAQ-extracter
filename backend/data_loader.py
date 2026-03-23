@@ -63,6 +63,11 @@ def normalize_schema(df: pd.DataFrame) -> pd.DataFrame:
     Supports multiple common column naming conventions.
     """
     # Try to map to standard names
+    # First, drop any "Unnamed: X" columns (CSV index artifacts)
+    unnamed_cols = [c for c in df.columns if str(c).startswith("Unnamed")]
+    if unnamed_cols:
+        df = df.drop(columns=unnamed_cols)
+
     col_map = {}
 
     # Customer message → question

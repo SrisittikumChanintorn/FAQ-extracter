@@ -231,26 +231,66 @@ def split_data(df: pd.DataFrame, n_splits: int) -> list[pd.DataFrame]:
 def run_one_batch(
     batch_df: pd.DataFrame,
     micro_batch_size: int = FAQ_EXTRACTION_BATCH_SIZE,
+    progress_callback=None,
+    split_label: str = "",
+    global_counter: dict = None,
 ) -> list[dict[str, Any]]:
     """
     Process one split: run LLM on each micro-batch, aggregate all groups.
-    Returns list of { group_name, faqs: [{ question, answer, mention_count }] }
-    with groups merged by name within this batch.
+    global_counter: shared dict with keys 'done', 'total', 'start_time' for overall ETA.
     """
+    import time as _time
+
     rows = batch_df.to_dict("records")
-    all_groups: list[dict] = []  # will merge by group_name
+    all_groups: list[dict] = []
+
+    total_micro = (len(rows) + micro_batch_size - 1) // micro_batch_size if micro_batch_size > 0 else 1
+    micro_idx = 0
 
     for i in range(0, len(rows), micro_batch_size):
         chunk = rows[i : i + micro_batch_size]
         if not chunk:
             continue
+        micro_idx += 1
+
+        # Global batch number
+        g_done = global_counter["done"] if global_counter else 0
+        g_total = global_counter["total"] if global_counter else total_micro
+
+        if progress_callback:
+            progress_callback(
+                4, "LLM batch extraction",
+                f"  📦 Batch {g_done + 1}/{g_total} ({split_label} · micro {micro_idx}/{total_micro}) — {len(chunk)} rows — processing…"
+            )
+
+        t0 = _time.time()
         parsed = _call_llm_extract_and_group(chunk)
+        elapsed = _time.time() - t0
+        n_faq = sum(len(item.get("faqs", [])) for item in parsed)
+
+        # Update global counter
+        if global_counter:
+            global_counter["done"] += 1
+            g_done = global_counter["done"]
+            total_elapsed = _time.time() - global_counter["start_time"]
+            avg_per_batch = total_elapsed / g_done if g_done > 0 else 0
+            remaining = (g_total - g_done) * avg_per_batch
+            eta_str = f"{remaining:.0f}s" if remaining < 3600 else f"{remaining/60:.0f}m"
+            progress_callback(
+                4, "LLM batch extraction",
+                f"  ✅ Batch {g_done}/{g_total} done — {elapsed:.1f}s · {n_faq} FAQ(s) · ETA remaining: ~{eta_str}"
+            )
+        elif progress_callback:
+            progress_callback(
+                4, "LLM batch extraction",
+                f"  ✅ {split_label} · Micro-batch {micro_idx}/{total_micro} — {elapsed:.1f}s · {n_faq} FAQ(s) extracted"
+            )
+
         for item in parsed:
             name = (item.get("group_name") or "").strip() or "Other"
             faqs = item.get("faqs", [])
             if not faqs:
                 continue
-            # Merge into existing group by name (exact match within batch)
             found = False
             for g in all_groups:
                 if (g.get("group_name") or "").strip() == name:
@@ -267,19 +307,65 @@ def run_all_batches(
     df: pd.DataFrame,
     n_splits: int = FAQ_N_SPLITS,
     micro_batch_size: int = FAQ_EXTRACTION_BATCH_SIZE,
+    progress_callback=None,
 ) -> list[list[dict[str, Any]]]:
     """
     Split data into n_splits, run LLM extract+group on each split.
     Returns list of batch results; each element is list of { group_name, faqs }.
     """
+    import time as _time
+
     parts = split_data(df, n_splits)
     if not parts:
         return []
 
+    # Pre-calculate total micro-batches across ALL splits for global progress
+    total_micro_all = 0
+    for part in parts:
+        n_rows = len(part)
+        total_micro_all += (n_rows + micro_batch_size - 1) // micro_batch_size if micro_batch_size > 0 else 1
+
+    global_counter = {"done": 0, "total": total_micro_all, "start_time": _time.time()}
+
+    if progress_callback:
+        progress_callback(
+            4, "LLM batch extraction",
+            f"  📊 Total: {len(df)} rows → {n_splits} splits × ~{micro_batch_size} rows/batch = {total_micro_all} LLM calls"
+        )
+
     results = []
+    overall_t0 = _time.time()
+
     for i, part in enumerate(parts):
-        logger.info(f"Batch {i + 1}/{len(parts)}: {len(part)} conversations.")
-        batch_result = run_one_batch(part, micro_batch_size)
+        split_label = f"Split {i + 1}/{len(parts)}"
+        msg = f"  ▸ {split_label}: {len(part)} conversations"
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(4, "LLM batch extraction", msg)
+
+        t0 = _time.time()
+        batch_result = run_one_batch(
+            part, micro_batch_size,
+            progress_callback=progress_callback,
+            split_label=split_label,
+            global_counter=global_counter,
+        )
+        split_elapsed = _time.time() - t0
+        total_faqs = sum(len(g["faqs"]) for g in batch_result)
+
+        summary = f"  🏁 {split_label} done — {split_elapsed:.1f}s · {len(batch_result)} groups · {total_faqs} FAQ(s)"
+        logger.info(summary)
+        if progress_callback:
+            progress_callback(4, "LLM batch extraction", summary)
+
         results.append(batch_result)
-        logger.info(f"  → {len(batch_result)} groups, {sum(len(g['faqs']) for g in batch_result)} FAQs.")
+
+    overall_elapsed = _time.time() - overall_t0
+    done_msg = f"  🎉 All {len(parts)} splits done in {overall_elapsed:.1f}s · {global_counter['done']}/{global_counter['total']} batches completed"
+    logger.info(done_msg)
+    if progress_callback:
+        progress_callback(4, "LLM batch extraction", done_msg)
+
     return results
+
+

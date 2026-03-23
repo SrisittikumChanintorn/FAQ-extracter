@@ -186,7 +186,7 @@ def set_pipeline_state(faq_index, faqs, analytics, valid_questions, valid_embedd
 
 # ── Pipeline Runner (runs in a background thread) ─────────────────────────────
 
-def _run_pipeline_thread(input_file: str):
+def _run_pipeline_thread(input_file: str, n_splits: int = None, batch_size: int = None):
     global _faq_index, _faqs, _analytics_report, _valid_questions, _valid_embeddings
 
     def progress_cb(stage: int, stage_name: str, message: str):
@@ -195,7 +195,7 @@ def _run_pipeline_thread(input_file: str):
     try:
         _reset_pipeline_state(input_file)
         from backend.main import run_pipeline
-        state = run_pipeline(input_file, progress_callback=progress_cb)
+        state = run_pipeline(input_file, progress_callback=progress_cb, n_splits_override=n_splits, batch_size_override=batch_size)
         set_pipeline_state(
             faq_index=state["faq_index"],
             faqs=state["groups"],
@@ -241,37 +241,13 @@ def _load_groups_from_disk() -> list:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """On startup: load FAISS index and FAQ data from disk."""
+    """On startup: prepare directories but do NOT auto-load saved data.
+    The UI starts empty; the user must explicitly load mockup or upload data."""
     global _faq_index, _faqs, _analytics_report
-
-    from backend.search_index import FAQSearchIndex
-    index = FAQSearchIndex()
-    loaded = index.load(FAISS_INDEX_FILE, FAISS_META_FILE)
-    if loaded:
-        _faq_index = index
-        _faqs = _normalize_groups_in_place(list(index.faqs or []))
-    else:
-        groups = _load_groups_from_disk()
-        if groups:
-            _faqs = _normalize_groups_in_place(list(groups or []))
-            index.build(groups)
-            index.save()
-            _faq_index = index
-            logger.info(f"Loaded {len(groups)} groups from {FAQ_OUTPUT_FILE} and built search index.")
-
-    if os.path.isfile(ANALYTICS_OUTPUT_FILE):
-        try:
-            with open(ANALYTICS_OUTPUT_FILE, "r", encoding="utf-8") as f:
-                _analytics_report = json.load(f)
-        except Exception as e:
-            logger.warning(f"Could not load analytics: {e}")
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    if _faqs:
-        logger.info(f"API ready: {len(_faqs)} groups loaded.")
-    else:
-        logger.warning("No FAQ data found. Upload a file and run the pipeline from the UI.")
+    logger.info("API ready (clean start). Upload data or load mockup from the UI.")
 
     yield
 
@@ -323,6 +299,14 @@ def create_app() -> FastAPI:
         input_file: str = Field(
             default="",
             description="Path to input file. Leave empty to use last uploaded file or default dataset.",
+        )
+        n_splits: int = Field(
+            default=0,
+            description="Number of data splits for batch extraction. 0 = auto-calculate based on row count.",
+        )
+        batch_size: int = Field(
+            default=0,
+            description="Rows per micro-batch for LLM extraction. 0 = auto-calculate based on row count.",
         )
 
     class DeleteFAQsRequest(BaseModel):
@@ -560,12 +544,21 @@ def create_app() -> FastAPI:
         if not os.path.isfile(input_file):
             raise HTTPException(
                 status_code=404,
-                detail=f"Input file not found: '{input_file}'. Please upload a file first.",
+                detail=f"Input file not found: '{input_file}'. Please upload a file or load mockup data first.",
             )
 
-        thread = threading.Thread(target=_run_pipeline_thread, args=(input_file,), daemon=True)
+        # Pass dynamic batch params (0 means auto)
+        n_splits = req.n_splits if req.n_splits > 0 else None
+        batch_size = req.batch_size if req.batch_size > 0 else None
+
+        thread = threading.Thread(
+            target=_run_pipeline_thread,
+            args=(input_file,),
+            kwargs={"n_splits": n_splits, "batch_size": batch_size},
+            daemon=True,
+        )
         thread.start()
-        return {"message": "Pipeline started.", "input_file": input_file}
+        return {"message": "Pipeline started.", "input_file": input_file, "n_splits": n_splits, "batch_size": batch_size}
 
     # ── Pipeline Status Endpoint ───────────────────────────────────────────────
 
@@ -945,6 +938,45 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"Delete failed: {e}")
             raise HTTPException(500, f"Failed to save and rebuild FAISS index: {str(e)}")
+
+    # ── Load Mockup Data Endpoint ─────────────────────────────────────────────
+
+    @app.post("/load-mockup", tags=["Pipeline"])
+    async def load_mockup_data():
+        """Import the built-in mockup dataset into uploads (no analysis)."""
+        if not os.path.isfile(DEFAULT_INPUT_FILE):
+            # Generate mock data on the fly if it doesn't exist
+            try:
+                import subprocess as _sp
+                gen_script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "generate_mock_data.py")
+                if os.path.isfile(gen_script):
+                    _sp.run([sys.executable, gen_script], check=True)
+                    logger.info("Generated mock data via generate_mock_data.py")
+                else:
+                    raise FileNotFoundError("generate_mock_data.py not found")
+            except Exception as e:
+                raise HTTPException(500, f"Could not generate mock data: {e}")
+
+        if not os.path.isfile(DEFAULT_INPUT_FILE):
+            raise HTTPException(404, "Default input file (conversations.json) not found.")
+
+        try:
+            os.makedirs(UPLOAD_DIR, exist_ok=True)
+            dest = os.path.join(UPLOAD_DIR, "input_mapped.json")
+            shutil.copyfile(DEFAULT_INPUT_FILE, dest)
+            # Count rows
+            with open(dest, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            row_count = len(data) if isinstance(data, list) else 0
+            logger.info(f"Mockup data loaded: {row_count} rows → {dest}")
+            return {
+                "message": "Mockup data loaded successfully. Ready for processing.",
+                "row_count": row_count,
+                "file_path": dest,
+            }
+        except Exception as e:
+            logger.error(f"Failed to load mockup data: {e}")
+            raise HTTPException(500, f"Failed to load mockup data: {e}")
 
     # ── Serve Frontend Static Files (must be LAST) ────────────────────────────
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

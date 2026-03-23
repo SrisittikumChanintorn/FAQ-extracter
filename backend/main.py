@@ -73,10 +73,12 @@ def _groups_to_canonical_schema(groups: list[dict]) -> list[dict]:
     return canonical
 
 
-def run_pipeline(input_file: str, progress_callback=None) -> dict:
+def run_pipeline(input_file: str, progress_callback=None, n_splits_override=None, batch_size_override=None) -> dict:
     """
     Run optimized pipeline: load → clean → filter → batch extract (LLM) → merge → index → save.
     progress_callback(stage, stage_name, message) is optional for UI progress.
+    n_splits_override / batch_size_override: if provided, override config defaults.
+      If None, auto-calculate based on dataset size for optimal results.
     Returns state dict for API.
     """
     import numpy as np
@@ -116,11 +118,31 @@ def run_pipeline(input_file: str, progress_callback=None) -> dict:
     from backend.batch_extractor import run_all_batches
     from backend.config import FAQ_EXTRACTION_BATCH_SIZE
 
-    _prog(4, "LLM batch extraction", "Stage 4: LLM extracting FAQs + groups per batch…")
+    # Determine batch parameters: use overrides, or auto-calculate from row count
+    row_count = len(valid_df)
+    if n_splits_override is not None:
+        actual_n_splits = max(1, n_splits_override)
+    else:
+        # Auto: 1 split per ~50 rows, min 1, max 10
+        actual_n_splits = max(1, min(10, row_count // 50)) if row_count > 0 else FAQ_N_SPLITS
+
+    if batch_size_override is not None:
+        actual_batch_size = max(1, batch_size_override)
+    else:
+        # Auto: 3-8 rows per batch depending on dataset size
+        if row_count <= 30:
+            actual_batch_size = 3
+        elif row_count <= 100:
+            actual_batch_size = 5
+        else:
+            actual_batch_size = FAQ_EXTRACTION_BATCH_SIZE
+
+    _prog(4, "LLM batch extraction", f"Stage 4: LLM extracting FAQs + groups per batch… (splits={actual_n_splits}, batch_size={actual_batch_size})")
     batch_results = run_all_batches(
         valid_df,
-        n_splits=FAQ_N_SPLITS,
-        micro_batch_size=FAQ_EXTRACTION_BATCH_SIZE,
+        n_splits=actual_n_splits,
+        micro_batch_size=actual_batch_size,
+        progress_callback=progress_callback,
     )
 
     if not batch_results or all(not r for r in batch_results):

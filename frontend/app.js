@@ -87,6 +87,7 @@ function switchPage(id, el) {
   if (id === 'manage') renderDMTable();
   if (id === 'manipulate') loadRawData();
   if (id === 'viz') initVisualization();
+  if (id === 'pipeline') restoreLogsFromServer();
 }
 
 // ── Health Check ──────────────────────────────────────────────────────────────
@@ -840,7 +841,7 @@ async function applyDataMapping() {
     document.getElementById('dataMappingSection').style.display = 'none';
     document.getElementById('uploadSuccess').style.display = 'block';
     document.getElementById('uploadSuccessMsg').textContent = `Mapped ${res.row_count} rows successfully.`;
-    document.getElementById('pipelineInputLabel').textContent = `${state.uploadedFilename} (Mapped)`;
+    // pipelineInputLabel removed — not needed in new flow
     
     showToast(`✅ Data mapped successfully. Ready for processing!`, 'success');
   } catch(err) {
@@ -875,17 +876,28 @@ async function runPipeline() {
   const btn = document.getElementById('runBtn');
   btn.disabled = true; btn.textContent = '⏳ Running…';
   document.getElementById('stopBtn').style.display = 'block';
-  document.getElementById('logTerminal').innerHTML = '';
+  // Don't clear logs — add separator
+  appendLog('─'.repeat(50), 'log-info');
+  appendLog(`▶ Starting new pipeline run…`, 'log-stage');
+
+  // Read batch parameter sliders
+  const nSplits = parseInt(document.getElementById('splitsSlider').value) || 0;
+  const batchSize = parseInt(document.getElementById('batchSlider').value) || 0;
+
   try {
     const res = await apiFetch('/run-pipeline', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
-          input_file: state.uploadedPath || "",
+          input_file: "",
+          n_splits: nSplits,
+          batch_size: batchSize,
       }),
     });
     appendLog(`▶ ${res.message}`, 'log-stage');
     appendLog(`📄 Input: ${res.input_file}`, 'log-info');
-    startPoll();
+    if (res.n_splits) appendLog(`  Splits: ${res.n_splits}`, 'log-info');
+    if (res.batch_size) appendLog(`  Batch size: ${res.batch_size}`, 'log-info');
+    startPoll(true);
   } catch(err) {
     appendLog(`❌ Error: ${err.message}`, 'log-error');
     showToast(`Analysis failed: ${err.message}`, 'error');
@@ -895,16 +907,67 @@ async function runPipeline() {
 
 function appendLog(txt, cls='') {
   const el = document.getElementById('logTerminal');
+  // Remove placeholder if present
+  const placeholder = el.querySelector('[data-placeholder]');
+  if (placeholder) placeholder.remove();
   const d  = document.createElement('div');
   d.className = cls; d.textContent = txt;
-  el.appendChild(d); el.scrollTop = el.scrollHeight;
+  // Append so newest is at the bottom (Queue/Terminal style)
+  el.appendChild(d); 
+  el.scrollTop = el.scrollHeight;
 }
 
-function clearLog() { document.getElementById('logTerminal').innerHTML=''; }
+function clearLog() {
+  document.getElementById('logTerminal').innerHTML=
+    '<span data-placeholder style="color:var(--text-muted);">// Progress log will appear here when you start analysis...</span>';
+}
+
+/** Restore logs from server (survives page refresh, only lost on server restart) */
+async function restoreLogsFromServer() {
+  try {
+    const d = await apiFetch('/pipeline-status');
+    const logs = d.logs || [];
+    _lastLogLen = logs.length;
+    const el = document.getElementById('logTerminal');
+    el.innerHTML = '';
+    if (logs.length === 0) {
+      el.innerHTML = '<span data-placeholder style="color:var(--text-muted);">// Progress log will appear here when you start analysis...</span>';
+      return;
+    }
+    // Build all entries in normal order (newest at bottom)
+    for (let i = 0; i < logs.length; i++) {
+      const l = logs[i];
+      const cls = l.startsWith('✅')?'log-success':l.startsWith('❌')?'log-error':
+           l.startsWith('Stage')?'log-stage':l.startsWith('  →')?'log-info':'';
+      const div = document.createElement('div');
+      div.className = cls;
+      div.textContent = l;
+      el.appendChild(div);
+    }
+    // Scroll to bottom after restore
+    el.scrollTop = el.scrollHeight;
+    // Update status badge & progress
+    document.getElementById('pipelineStatusBadge').textContent = `Status: ${d.status}`;
+    if (d.status === 'running') {
+      const pct = d.total_stages ? Math.round((d.stage/d.total_stages)*100) : 0;
+      document.getElementById('progressFill').style.width = pct+'%';
+      document.getElementById('progressPct').textContent  = pct+'%';
+      document.getElementById('progressLabel').textContent = d.stage_name||d.status;
+      // Resume polling if pipeline is still running
+      startPoll();
+    } else if (d.status === 'done') {
+      document.getElementById('progressFill').style.width='100%';
+      document.getElementById('progressPct').textContent='100%';
+      document.getElementById('progressLabel').textContent=`✅ Complete (${d.elapsed_seconds}s) · ${d.faq_count} FAQs`;
+    }
+  } catch(e) {
+    console.warn('restoreLogsFromServer:', e);
+  }
+}
 
 let _lastLogLen = 0;
-function startPoll() {
-  _lastLogLen = 0;
+function startPoll(resetLogPointer) {
+  if (resetLogPointer) _lastLogLen = 0;
   if(state.pipelinePollTimer) clearInterval(state.pipelinePollTimer);
   state.pipelinePollTimer = setInterval(pollStatus, 1200);
 }
@@ -948,7 +1011,7 @@ function stopPoll() {
 
 function resetRunBtn() {
   const btn = document.getElementById('runBtn');
-  btn.disabled=false; btn.textContent='▶ Start Analysis';
+  btn.disabled=false; btn.textContent='▶ Run Pipeline';
   document.getElementById('stopBtn').style.display='none';
   checkHealth();
 }
@@ -1144,6 +1207,33 @@ function closeEditRowModal() {
   editingRowIndex = -1;
 }
 
+// ── Slider Helpers ───────────────────────────────────────────────────────────────────────
+function updateSplitsLabel(v) {
+  document.getElementById('splitsValue').textContent = v == 0 ? 'Auto' : v;
+}
+function updateBatchLabel(v) {
+  document.getElementById('batchValue').textContent = v == 0 ? 'Auto' : v;
+}
+
+// ── Load Mockup Data ──────────────────────────────────────────────────────────────────
+async function loadMockupData() {
+  const btn = document.getElementById('mockupBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="mini-spinner"></div> Loading…';
+
+  try {
+    const res = await apiFetch('/load-mockup', { method: 'POST' });
+    document.getElementById('mockupSuccess').style.display = 'block';
+    document.getElementById('mockupSuccessMsg').textContent = `${res.row_count} rows loaded. Go to "Data Manipulation" to review, or "Process & Analyze" to run the pipeline.`;
+    showToast(`✅ Mockup data loaded: ${res.row_count} rows. No analysis was run.`, 'success');
+  } catch (err) {
+    showToast(`Failed to load mockup data: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🧪 Load Mockup Data';
+  }
+}
+
 function saveEditRow() {
   if (editingRowIndex < 0 || !state.manipulateData[editingRowIndex]) return;
   const headers = state.manipulateHeaders || Object.keys(state.manipulateData[editingRowIndex]);
@@ -1207,12 +1297,9 @@ async function saveRawData() {
   initSearch();
   refreshAllViews();
   await checkHealth();
-  try {
-    await loadAll();
-  } catch (err) {
-    console.error('Init loadAll error:', err);
-    refreshAllViews();
-  }
+  // Restore any previous pipeline logs from server memory
+  await restoreLogsFromServer();
+  // Do NOT auto-load data — let the user choose to upload or load mockup
 })();
 
 // ── Export ──────────────────────────────────────────────────────────────────
