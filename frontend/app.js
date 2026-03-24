@@ -19,6 +19,7 @@ let state = {
   pipelinePollTimer: null,
   dmSelected: new Set(),   // indices selected in Data Management
   selectAll:  false,
+  manipulateSelected: new Set(), // indices selected in Data Manipulation
 };
 
 const STAGE_LABELS = [
@@ -177,6 +178,15 @@ function refreshAllViews() {
   try { renderDMTable(); } catch(e) { console.error('renderDMTable error:', e); }
   try { resetSearchUI(); } catch(e) { console.error('resetSearchUI error:', e); }
   try { populateHintChips(); } catch(e) { console.error('populateHintChips error:', e); }
+}
+
+function invalidateProcessedViews() {
+  // Uploaded rows changed; cached FAQ/analytics are no longer aligned with source rows.
+  state.faqs = [];
+  state.clusters = [];
+  state.analytics = null;
+  state.dmSelected.clear();
+  refreshAllViews();
 }
 
 // ── FAQ Library ───────────────────────────────────────────────────────────────
@@ -475,11 +485,9 @@ function renderDMTable() {
   if (!thead) return;
 
   state.dmSelected.clear();
-  const cbAllEl = document.getElementById('cbAll');
-  if (cbAllEl) cbAllEl.checked = false;
 
   thead.innerHTML = `<tr>
-    <th style="width:40px"><input type="checkbox" class="dm-cb" id="cbAll" onchange="onCbAllChange(this)"></th>
+    <th style="width:40px"></th>
     <th>No.</th>
     <th>Question</th>
     <th>Answer (Preview)</th>
@@ -524,12 +532,9 @@ function onRowCbChange(i) {
   if (cb.checked) { state.dmSelected.add(i); row.classList.add('selected'); }
   else            { state.dmSelected.delete(i); row.classList.remove('selected'); }
   updateDeleteBtn();
-  const cbAll = document.getElementById('cbAll');
-  if (cbAll) cbAll.checked = (state.faqs.length > 0 && state.dmSelected.size === state.faqs.length);
 }
 
-function onCbAllChange(cbAll) {
-  const checked = !!cbAll && cbAll.checked;
+function onCbAllChangeByState(checked) {
   state.faqs.forEach((_, i) => {
     const cb = document.getElementById(`dm-cb-${i}`);
     const row = document.getElementById(`dm-row-${i}`);
@@ -542,10 +547,8 @@ function onCbAllChange(cbAll) {
 }
 
 function toggleSelectAll() {
-  const cbAll = document.getElementById('cbAll');
-  if (!cbAll) return;
-  cbAll.checked = !cbAll.checked;
-  onCbAllChange(cbAll);
+  const shouldSelectAll = !(state.faqs.length > 0 && state.dmSelected.size === state.faqs.length);
+  onCbAllChangeByState(shouldSelectAll);
 }
 
 function updateDeleteBtn() {
@@ -759,6 +762,7 @@ async function doUpload() {
     if (!res.ok) throw new Error(body.detail||res.statusText);
     
     state.uploadedPath = body.saved_path;
+    invalidateProcessedViews();
     document.getElementById('uploadActions').style.display  = 'none';
     showToast(`✅ "${body.filename}" uploaded successfully. Fetching preview...`, 'success');
     
@@ -842,6 +846,7 @@ async function applyDataMapping() {
     document.getElementById('uploadSuccess').style.display = 'block';
     document.getElementById('uploadSuccessMsg').textContent = `Mapped ${res.row_count} rows successfully.`;
     // pipelineInputLabel removed — not needed in new flow
+    invalidateProcessedViews();
     
     showToast(`✅ Data mapped successfully. Ready for processing!`, 'success');
   } catch(err) {
@@ -1128,6 +1133,7 @@ async function loadRawData() {
 
     state.manipulateData = res.data;
     state.manipulateHeaders = Object.keys(res.data[0]);
+    state.manipulateSelected = new Set();
     renderManipulateTable();
   } catch (err) {
     empty.innerHTML = 'No uploaded data found.';
@@ -1144,23 +1150,31 @@ function renderManipulateTable() {
   const countEl = document.getElementById('manipulateCount');
   const data = state.manipulateData || [];
   const headers = state.manipulateHeaders || [];
+  state.manipulateSelected = state.manipulateSelected || new Set();
 
   if (!data.length || !headers.length) {
     empty.style.display = 'block';
     empty.innerHTML = 'No data.';
     tableWrap.style.display = 'none';
     if (countEl) countEl.textContent = '';
+    updateManipulateDeleteBtn();
     return;
   }
 
   if (countEl) countEl.textContent = `${data.length} rows`;
-  thead.innerHTML = `<tr><th style="width:50px">#</th>${headers.map(h => `<th>${escHtml(h)}</th>`).join('')}<th style="width:100px;text-align:center;">Actions</th></tr>`;
+  thead.innerHTML = `<tr>
+    <th style="width:40px"><input type="checkbox" class="dm-cb" id="manipulateCbAll" onchange="onManipulateCbAllChange(this)"></th>
+    <th style="width:50px">#</th>
+    ${headers.map(h => `<th>${escHtml(h)}</th>`).join('')}
+    <th style="width:130px;text-align:center;">Actions</th>
+  </tr>`;
 
   const maxRows = Math.min(data.length, 500);
   let html = '';
   for (let i = 0; i < maxRows; i++) {
     const rowObj = data[i];
     html += `<tr data-idx="${i}">`;
+    html += `<td><input type="checkbox" class="dm-cb" id="manipulate-cb-${i}" ${state.manipulateSelected.has(i) ? 'checked' : ''} onchange="onManipulateRowCbChange(${i})"></td>`;
     html += `<td style="color:var(--text-muted);font-size:11px;text-align:center;">${i + 1}</td>`;
     headers.forEach(h => {
       const val = rowObj[h] !== null && rowObj[h] !== undefined ? rowObj[h] : '';
@@ -1176,10 +1190,61 @@ function renderManipulateTable() {
   tbody.innerHTML = html;
   empty.style.display = 'none';
   tableWrap.style.display = 'block';
+  const cbAll = document.getElementById('manipulateCbAll');
+  if (cbAll) cbAll.checked = data.length > 0 && state.manipulateSelected.size === data.length;
+  updateManipulateDeleteBtn();
 
   if (data.length > 500) {
     showToast('Viewing top 500 rows for performance. Full file will be saved.', 'info');
   }
+}
+
+function onManipulateRowCbChange(i) {
+  const cb = document.getElementById(`manipulate-cb-${i}`);
+  if (!cb) return;
+  if (cb.checked) state.manipulateSelected.add(i);
+  else state.manipulateSelected.delete(i);
+  const cbAll = document.getElementById('manipulateCbAll');
+  if (cbAll) cbAll.checked = state.manipulateData.length > 0 && state.manipulateSelected.size === state.manipulateData.length;
+  updateManipulateDeleteBtn();
+}
+
+function onManipulateCbAllChange(cbAll) {
+  const checked = !!cbAll && cbAll.checked;
+  state.manipulateSelected.clear();
+  (state.manipulateData || []).forEach((_, i) => {
+    const cb = document.getElementById(`manipulate-cb-${i}`);
+    if (cb) cb.checked = checked;
+    if (checked) state.manipulateSelected.add(i);
+  });
+  updateManipulateDeleteBtn();
+}
+
+function toggleManipulateSelectAll() {
+  const cbAll = document.getElementById('manipulateCbAll');
+  if (!cbAll) return;
+  cbAll.checked = !cbAll.checked;
+  onManipulateCbAllChange(cbAll);
+}
+
+function updateManipulateDeleteBtn() {
+  const btn = document.getElementById('deleteManipulateSelectedBtn');
+  const selectedCountEl = document.getElementById('manipulateSelectedCount');
+  const n = state.manipulateSelected ? state.manipulateSelected.size : 0;
+  if (btn) btn.disabled = (n === 0);
+  if (selectedCountEl) selectedCountEl.textContent = n;
+}
+
+function deleteSelectedManipulateRows() {
+  const selected = [...(state.manipulateSelected || [])].sort((a, b) => b - a);
+  if (!selected.length) return;
+  if (!confirm(`Delete ${selected.length} row(s)?`)) return;
+  selected.forEach(idx => {
+    if (idx >= 0 && idx < state.manipulateData.length) state.manipulateData.splice(idx, 1);
+  });
+  state.manipulateSelected.clear();
+  renderManipulateTable();
+  showToast(`${selected.length} row(s) deleted (click Save Changes to persist).`, 'info');
 }
 
 // ── Edit Row Modal ─────────────────────────────────────────────────────────────
@@ -1223,6 +1288,7 @@ async function loadMockupData() {
 
   try {
     const res = await apiFetch('/load-mockup', { method: 'POST' });
+    invalidateProcessedViews();
     document.getElementById('mockupSuccess').style.display = 'block';
     document.getElementById('mockupSuccessMsg').textContent = `${res.row_count} rows loaded. Go to "Data Manipulation" to review, or "Process & Analyze" to run the pipeline.`;
     showToast(`✅ Mockup data loaded: ${res.row_count} rows. No analysis was run.`, 'success');
@@ -1250,6 +1316,7 @@ function deleteManipulateRow(idx) {
   if (!state.manipulateData || idx < 0 || idx >= state.manipulateData.length) return;
   if (!confirm(`Delete row #${idx + 1}?`)) return;
   state.manipulateData.splice(idx, 1);
+  state.manipulateSelected.clear();
   renderManipulateTable();
   showToast(`Row deleted (click Save Changes to persist).`, 'info');
 }
@@ -1261,6 +1328,7 @@ function addManipulateRow() {
   const newRow = {};
   headers.forEach(h => newRow[h] = '');
   state.manipulateData.unshift(newRow);
+  state.manipulateSelected.clear();
   renderManipulateTable();
   openEditRowModal(0);
 }
@@ -1280,8 +1348,8 @@ async function saveRawData() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ data: state.manipulateData })
       });
+      invalidateProcessedViews();
       showToast('Data saved successfully. You can now run the analysis.', 'success');
-      renderAnalytics();
   } catch(err) {
       showToast(`Error saving data: ${err.message}`, 'error');
   } finally {

@@ -494,6 +494,10 @@ admin_reply</pre>
       <div class="page" id="page-manipulate">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
           <div style="display:flex;align-items:center;gap:12px;">
+            <button class="btn btn-ghost" onclick="toggleManipulateSelectAll()" style="font-size:12px;">☑ Select All</button>
+            <button class="btn btn-danger" id="deleteManipulateSelectedBtn" onclick="deleteSelectedManipulateRows()" style="font-size:12px;" disabled>
+              🗑 Delete (<span id="manipulateSelectedCount">0</span>)
+            </button>
             <span style="font-size:13px;color:var(--text-secondary);" id="manipulateCount"></span>
           </div>
           <div style="display:flex;gap:10px;">
@@ -693,7 +697,7 @@ admin_reply</pre>
           <table class="dm-table" id="dmTable">
             <thead>
               <tr>
-                <th style="width:40px"><input type="checkbox" class="dm-cb" id="cbAll" onchange="onCbAllChange(this)"></th>
+                <th style="width:40px"></th>
                 <th>No.</th>
                 <th>Question</th>
                 <th>Answer (Preview)</th>
