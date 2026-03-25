@@ -16,6 +16,8 @@ Usage:
   python backend/main.py --input data/conversations.json --serve
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -73,12 +75,19 @@ def _groups_to_canonical_schema(groups: list[dict]) -> list[dict]:
     return canonical
 
 
-def run_pipeline(input_file: str, progress_callback=None, n_splits_override=None, batch_size_override=None) -> dict:
+def run_pipeline(
+    input_file: str,
+    progress_callback=None,
+    n_splits_override=None,
+    batch_size_override=None,
+    max_faqs: int | None = None,
+) -> dict:
     """
     Run optimized pipeline: load → clean → filter → batch extract (LLM) → merge → index → save.
     progress_callback(stage, stage_name, message) is optional for UI progress.
     n_splits_override / batch_size_override: if provided, override config defaults.
       If None, auto-calculate based on dataset size for optimal results.
+    max_faqs: cap total FAQ items after quality filtering (default from config).
     Returns state dict for API.
     """
     import numpy as np
@@ -159,6 +168,13 @@ def run_pipeline(input_file: str, progress_callback=None, n_splits_override=None
 
     if not merged_groups:
         raise RuntimeError("Merge produced no groups. Check LLM output format.")
+
+    from backend.faq_quality import filter_and_cap_groups
+    merged_groups = filter_and_cap_groups(merged_groups, max_faqs)
+    if not merged_groups:
+        raise RuntimeError(
+            "No FAQs left after quality filtering. Try lowering filters or check your dataset."
+        )
 
     groups = _groups_to_canonical_schema(merged_groups)
     total_faq_items = sum(g["total_faqs"] for g in groups)

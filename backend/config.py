@@ -68,7 +68,7 @@ THAI_FILLER_PHRASES = [
 # ─────────────────────────────────────────────
 # STAGE 3 — QUESTION FILTERING
 # ─────────────────────────────────────────────
-MIN_QUESTION_LENGTH = 5       # Minimum characters after cleaning
+MIN_QUESTION_LENGTH = 8        # Minimum characters after cleaning (noise reduction)
 MAX_QUESTION_LENGTH = 1000    # Maximum characters (to reject ultra-long noise)
 
 # Regex patterns for emoji detection
@@ -115,7 +115,10 @@ FAQ_N_SPLITS = 3
 # Conversations per LLM call (micro-batch). Smaller = faster per call.
 FAQ_EXTRACTION_BATCH_SIZE = 5
 # Max FAQ pairs to extract per micro-batch (lower = faster LLM response).
-FAQ_PER_BATCH = 8
+FAQ_PER_BATCH = 6
+# Hard cap on FAQ items saved after quality ranking (UI can override up to FAQ_MAX_OUTPUT_CAP).
+FAQ_MAX_OUTPUT_DEFAULT = 200
+FAQ_MAX_OUTPUT_CAP = 500
 # Max tokens for LLM response (lower = faster).
 FAQ_EXTRACTION_NUM_PREDICT = 1200
 # When merging batches: question similarity above this → same FAQ (merge mention_count).

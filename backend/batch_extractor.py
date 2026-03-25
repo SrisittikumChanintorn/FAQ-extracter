@@ -33,6 +33,7 @@ from backend.config import (
     TOPIC_NAMER_MODEL,
     TOPIC_NAMER_OLLAMA_URL,
 )
+from backend.faq_quality import is_high_value_faq_pair
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 logger = logging.getLogger(__name__)
@@ -64,6 +65,8 @@ def _dedupe_faqs_exact(faqs: list[dict]) -> list[dict]:
         a = (f.get("answer") or "").strip()
         if len(q) < 3 or len(a) < 3 or a == q:
             continue
+        if not is_high_value_faq_pair(q, a):
+            continue
         k = _normalize_question_key(q)
         if not k:
             continue
@@ -82,10 +85,11 @@ def _dedupe_faqs_exact(faqs: list[dict]) -> list[dict]:
 _EXTRACT_AND_GROUP_SYSTEM = """You are an expert at extracting FAQs from customer–agent conversations.
 
 Your task:
-1) Extract only real question–answer pairs that appear in the conversations (frequent or useful as FAQs).
-2) Assign each pair into an appropriate topic group. The group_name must be short (3–5 words) and primarily in Thai, e.g. "ปัญหาการเข้าสู่ระบบ", "การยืนยันตัวตน". English words or numbers are allowed ONLY for proper nouns or technical terms that have no common Thai equivalent (e.g. "MT5", "Options", "Futures", "DCA").
-3) Questions should be neutral and generic (no personal names).
-4) Answers must come from what the admin/agent actually replied. If the exchange is not a clear Q&A, skip it.
+1) Extract only high-value business FAQs: clear customer problems or information needs with substantive agent answers (procedures, policies, product explanations).
+2) Skip chit-chat, greetings alone, "yes/no" acks, replies that are only ครับ/ค่ะ/โอเค/ok, sticker/media placeholders (e.g. "You sent a sticker"), or Q&A where the answer does not address the question.
+3) Assign each pair into an appropriate topic group. The group_name must be short (3–5 words) and primarily in Thai. English/numbers only for proper nouns or technical terms (e.g. "MT5", "DCA").
+4) Questions must be neutral and reusable (no personal names). Answers must be what the agent actually replied.
+5) Prefer fewer, better pairs over many weak ones.
 
 Return ONLY a JSON array (no extra text):
 [{"group_name":"ชื่อหมวดหมู่","faqs":[{"question":"...","answer":"..."}]}]"""
@@ -146,7 +150,7 @@ def _parse_grouped_faq_json(raw: str) -> list[dict]:
                 continue
             q = str(f.get("question", "")).strip()
             a = str(f.get("answer", "")).strip()
-            if len(q) >= 3 and len(a) >= 3 and a != q:
+            if len(q) >= 3 and len(a) >= 3 and a != q and is_high_value_faq_pair(q, a):
                 valid_faqs.append({"question": q, "answer": a, "mention_count": 1})
         valid_faqs = _dedupe_faqs_exact(valid_faqs)
         if valid_faqs:
@@ -158,7 +162,7 @@ def _parse_grouped_faq_json(raw: str) -> list[dict]:
             if isinstance(item, dict):
                 q = str(item.get("question", "")).strip()
                 a = str(item.get("answer", "")).strip()
-                if len(q) >= 3 and len(a) >= 3 and a != q:
+                if len(q) >= 3 and len(a) >= 3 and a != q and is_high_value_faq_pair(q, a):
                     flat.append({"question": q, "answer": a, "mention_count": 1})
         if flat:
             out = [{"group_name": "Other", "faqs": _dedupe_faqs_exact(flat)}]
@@ -178,8 +182,9 @@ def _call_llm_extract_and_group(conversations: list[dict]) -> list[dict]:
 
     text = _format_conversations(conversations)
     user = (
-        f"From the following conversations, extract up to {FAQ_PER_BATCH} useful FAQ Q&A pairs "
-        f"and organize them into topic groups with Thai group names (English/numbers OK for technical terms only).\n\n{text}\n\n"
+        f"From the following conversations, extract up to {FAQ_PER_BATCH} **high-quality** FAQ Q&A pairs "
+        f"(substantive answers only; skip stickers, ack-only replies, and casual fragments).\n"
+        f"Organize into topic groups with Thai group names (English/numbers OK for technical terms only).\n\n{text}\n\n"
         "Return ONLY a JSON array of groups: "
         "[{\"group_name\":\"ชื่อหมวดหมู่\",\"faqs\":[{\"question\":\"...\",\"answer\":\"...\"}]}]"
     )

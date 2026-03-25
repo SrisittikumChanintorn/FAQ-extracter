@@ -20,6 +20,7 @@ let state = {
   dmSelected: new Set(),   // indices selected in Data Management
   selectAll:  false,
   manipulateSelected: new Set(), // indices selected in Data Manipulation
+  pipelineRowCount: 0,           // rows in resolved pipeline input (for split/batch coupling)
 };
 
 const STAGE_LABELS = [
@@ -88,7 +89,71 @@ function switchPage(id, el) {
   if (id === 'manage') renderDMTable();
   if (id === 'manipulate') loadRawData();
   if (id === 'viz') initVisualization();
-  if (id === 'pipeline') restoreLogsFromServer();
+  if (id === 'pipeline') {
+    restoreLogsFromServer();
+    preparePipelinePage();
+  }
+}
+
+function pipelineCouplingTarget(R) {
+  if (!R || R < 1) return 40;
+  return Math.max(15, Math.min(300, Math.round(R / 3)));
+}
+
+async function refreshPipelineInputInfo() {
+  try {
+    const d = await apiFetch('/pipeline-input-info');
+    state.pipelineRowCount = d.row_count || 0;
+  } catch {
+    state.pipelineRowCount = 0;
+  }
+}
+
+function updatePipelineParamLabels() {
+  const sv = document.getElementById('splitsValue');
+  const bv = document.getElementById('batchValue');
+  const s = document.getElementById('splitsSlider');
+  const b = document.getElementById('batchSlider');
+  if (sv && s) sv.textContent = s.value;
+  if (bv && b) bv.textContent = b.value;
+}
+
+function onPipelineSplitsInput(val) {
+  const R = state.pipelineRowCount || 0;
+  const S = Math.max(1, Math.min(15, parseInt(val, 10) || 1));
+  const K = pipelineCouplingTarget(R);
+  let B = Math.round(K / Math.max(1, S));
+  B = Math.max(1, Math.min(20, B));
+  const sEl = document.getElementById('splitsSlider');
+  const bEl = document.getElementById('batchSlider');
+  if (sEl) sEl.value = String(S);
+  if (bEl) bEl.value = String(B);
+  updatePipelineParamLabels();
+}
+
+function onPipelineBatchInput(val) {
+  const R = state.pipelineRowCount || 0;
+  const B = Math.max(1, Math.min(20, parseInt(val, 10) || 1));
+  const K = pipelineCouplingTarget(R);
+  let S = Math.round(K / Math.max(1, B));
+  S = Math.max(1, Math.min(15, S));
+  const sEl = document.getElementById('splitsSlider');
+  const bEl = document.getElementById('batchSlider');
+  if (sEl) sEl.value = String(S);
+  if (bEl) bEl.value = String(B);
+  updatePipelineParamLabels();
+}
+
+function updateMaxFaqsLabel(v) {
+  const el = document.getElementById('maxFaqsValue');
+  if (el) el.textContent = v;
+}
+
+async function preparePipelinePage() {
+  await refreshPipelineInputInfo();
+  const splitEl = document.getElementById('splitsSlider');
+  if (splitEl && (!splitEl.value || parseInt(splitEl.value, 10) < 1)) splitEl.value = '3';
+  onPipelineSplitsInput(splitEl ? splitEl.value : '3');
 }
 
 // ── Health Check ──────────────────────────────────────────────────────────────
@@ -885,9 +950,9 @@ async function runPipeline() {
   appendLog('─'.repeat(50), 'log-info');
   appendLog(`▶ Starting new pipeline run…`, 'log-stage');
 
-  // Read batch parameter sliders
-  const nSplits = parseInt(document.getElementById('splitsSlider').value) || 0;
-  const batchSize = parseInt(document.getElementById('batchSlider').value) || 0;
+  const maxFaqs = parseInt(document.getElementById('maxFaqsSlider').value, 10) || 200;
+  const nSplits = parseInt(document.getElementById('splitsSlider').value, 10) || 1;
+  const batchSize = parseInt(document.getElementById('batchSlider').value, 10) || 1;
 
   try {
     const res = await apiFetch('/run-pipeline', {
@@ -896,12 +961,14 @@ async function runPipeline() {
           input_file: "",
           n_splits: nSplits,
           batch_size: batchSize,
+          max_faqs: maxFaqs,
       }),
     });
     appendLog(`▶ ${res.message}`, 'log-stage');
     appendLog(`📄 Input: ${res.input_file}`, 'log-info');
-    if (res.n_splits) appendLog(`  Splits: ${res.n_splits}`, 'log-info');
-    if (res.batch_size) appendLog(`  Batch size: ${res.batch_size}`, 'log-info');
+    appendLog(`  Splits: ${nSplits}`, 'log-info');
+    appendLog(`  Batch size: ${batchSize}`, 'log-info');
+    if (maxFaqs) appendLog(`  Max FAQs: ${maxFaqs}`, 'log-info');
     startPoll(true);
   } catch(err) {
     appendLog(`❌ Error: ${err.message}`, 'log-error');
@@ -997,7 +1064,12 @@ async function pollStatus() {
       document.getElementById('progressPct').textContent='100%';
       document.getElementById('progressLabel').textContent=`✅ Complete (${d.elapsed_seconds}s) · ${d.faq_count} FAQs`;
       showToast(`✅ Analysis complete! ${d.faq_count} FAQs generated.`, 'success');
-      resetRunBtn(); loadAll();
+      resetRunBtn();
+      loadAll().then(() => {
+        try {
+          if (document.getElementById('page-viz')?.classList.contains('active')) initVisualization();
+        } catch (e) { /* ignore */ }
+      });
     } else if(d.status==='error'){
       stopPoll();
       appendLog(`❌ ${d.error||'Unknown error'}`, 'log-error');
@@ -1270,14 +1342,6 @@ function openEditRowModal(idx) {
 function closeEditRowModal() {
   document.getElementById('editRowModal').classList.remove('visible');
   editingRowIndex = -1;
-}
-
-// ── Slider Helpers ───────────────────────────────────────────────────────────────────────
-function updateSplitsLabel(v) {
-  document.getElementById('splitsValue').textContent = v == 0 ? 'Auto' : v;
-}
-function updateBatchLabel(v) {
-  document.getElementById('batchValue').textContent = v == 0 ? 'Auto' : v;
 }
 
 // ── Load Mockup Data ──────────────────────────────────────────────────────────────────

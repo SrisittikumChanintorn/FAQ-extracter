@@ -377,7 +377,9 @@
         <h1 id="pageTitle">Upload Data</h1>
         <p id="pageSubtitle">Accepted formats: Excel, CSV, JSON</p>
       </div>
-      <div class="topbar-right"></div>
+      <div class="topbar-right">
+        <button type="button" class="btn btn-primary" id="topbarRefreshBtn" onclick="loadAll()" title="Reload FAQs, clusters, and reports from the server (same as former Refresh Charts)">📊 Refresh</button>
+      </div>
     </div>
 
     <div class="content">
@@ -528,24 +530,31 @@ admin_reply</pre>
                 The system runs in fully unsupervised mode. AI extracts FAQ pairs from your conversations and groups them by topic. Use the last uploaded (or mapped) file, or the built-in sample if none is set.
               </p>
 
-              <!-- Batch Parameter Controls -->
+              <!-- Extraction parameters -->
               <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px;padding:14px;background:var(--bg-glass);border:1px solid var(--border);border-radius:var(--radius-sm);">
-                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:2px;">Pipeline Parameters</div>
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:2px;">FAQ Extraction</div>
                 <div class="config-row">
                   <div class="config-label">
-                    <span>Number of Splits</span>
-                    <span class="config-value" id="splitsValue">Auto</span>
+                    <span>Max FAQ output</span>
+                    <span class="config-value" id="maxFaqsValue">200</span>
                   </div>
-                  <input type="range" id="splitsSlider" min="0" max="15" value="0" oninput="updateSplitsLabel(this.value)" />
-                  <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">0 = Auto (based on row count)</div>
+                  <input type="range" id="maxFaqsSlider" min="10" max="200" value="200" oninput="updateMaxFaqsLabel(this.value)" />
+                  <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">Caps total FAQs after quality ranking (high-ROI filter).</div>
+                </div>
+                <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px;">Adjust <strong>either</strong> slider — the other updates automatically from dataset size (inverse coupling).</div>
+                <div class="config-row">
+                  <div class="config-label">
+                    <span>Number of splits</span>
+                    <span class="config-value" id="splitsValue">3</span>
+                  </div>
+                  <input type="range" id="splitsSlider" min="1" max="15" value="3" oninput="onPipelineSplitsInput(this.value)" />
                 </div>
                 <div class="config-row">
                   <div class="config-label">
-                    <span>Rows per Batch</span>
-                    <span class="config-value" id="batchValue">Auto</span>
+                    <span>Rows per batch</span>
+                    <span class="config-value" id="batchValue">—</span>
                   </div>
-                  <input type="range" id="batchSlider" min="0" max="20" value="0" oninput="updateBatchLabel(this.value)" />
-                  <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">0 = Auto (based on row count)</div>
+                  <input type="range" id="batchSlider" min="1" max="20" value="5" oninput="onPipelineBatchInput(this.value)" />
                 </div>
               </div>
 
@@ -634,9 +643,6 @@ admin_reply</pre>
 
       <!-- Reports & Charts Page -->
       <div class="page" id="page-analytics">
-        <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
-          <button class="btn btn-primary" onclick="loadAll()">📊 Refresh Charts</button>
-        </div>
         <div class="analytics-grid" id="analyticsGrid" style="grid-template-columns: 1fr;">
           <!-- Top Row: Charts -->
           <div id="analyticsTopRow" style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 20px;"></div>

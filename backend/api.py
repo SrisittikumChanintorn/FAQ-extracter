@@ -14,10 +14,13 @@ Endpoints:
   POST /preview-data         - Read uploaded file headers and top 5 rows
   POST /apply-mapping        - Rename chosen columns and save ready for processing
   POST /run-pipeline         - Trigger pipeline in background thread
+  GET  /pipeline-input-info  - Row count for resolved pipeline input (UI coupling)
   GET  /pipeline-status      - Poll pipeline progress
   POST /faqs/relabel         - Relabel FAQs to a different cluster
   POST /faqs/delete          - Delete FAQs by index
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -186,7 +189,12 @@ def set_pipeline_state(faq_index, faqs, analytics, valid_questions, valid_embedd
 
 # ── Pipeline Runner (runs in a background thread) ─────────────────────────────
 
-def _run_pipeline_thread(input_file: str, n_splits: int = None, batch_size: int = None):
+def _run_pipeline_thread(
+    input_file: str,
+    n_splits: int = None,
+    batch_size: int = None,
+    max_faqs: int | None = None,
+):
     global _faq_index, _faqs, _analytics_report, _valid_questions, _valid_embeddings
 
     def progress_cb(stage: int, stage_name: str, message: str):
@@ -195,7 +203,13 @@ def _run_pipeline_thread(input_file: str, n_splits: int = None, batch_size: int 
     try:
         _reset_pipeline_state(input_file)
         from backend.main import run_pipeline
-        state = run_pipeline(input_file, progress_callback=progress_cb, n_splits_override=n_splits, batch_size_override=batch_size)
+        state = run_pipeline(
+            input_file,
+            progress_callback=progress_cb,
+            n_splits_override=n_splits,
+            batch_size_override=batch_size,
+            max_faqs=max_faqs,
+        )
         set_pipeline_state(
             faq_index=state["faq_index"],
             faqs=state["groups"],
@@ -308,6 +322,12 @@ def create_app() -> FastAPI:
             default=0,
             description="Rows per micro-batch for LLM extraction. 0 = auto-calculate based on row count.",
         )
+        max_faqs: int = Field(
+            default=0,
+            ge=0,
+            le=500,
+            description="Max FAQ items to keep after quality ranking. 0 = use server default (e.g. 200).",
+        )
 
     class DeleteFAQsRequest(BaseModel):
         indices: list[int] = Field(..., description="List of FAQ indices (0-based) to delete.")
@@ -344,6 +364,22 @@ def create_app() -> FastAPI:
                 status_code=503,
                 detail="FAQ index not ready. Please upload a file and run the pipeline from the UI.",
             )
+
+    def _resolve_pipeline_input_file(req_input: str = "") -> str:
+        input_file = req_input.strip() if req_input else ""
+        if not input_file:
+            mapped_path = os.path.join(UPLOAD_DIR, "input_mapped.json")
+            if os.path.isfile(mapped_path):
+                input_file = mapped_path
+            else:
+                for ext in [".json", ".csv", ".xlsx", ".xls"]:
+                    candidate = os.path.join(UPLOAD_DIR, f"input{ext}")
+                    if os.path.isfile(candidate):
+                        input_file = candidate
+                        break
+        if not input_file:
+            input_file = DEFAULT_INPUT_FILE
+        return input_file
 
     def _pca_3d(X: np.ndarray) -> np.ndarray:
         """Reduce embedding matrix to 3 dimensions using numpy SVD (no sklearn required)."""
@@ -526,20 +562,7 @@ def create_app() -> FastAPI:
             if _pipeline_state["status"] == "running":
                 raise HTTPException(status_code=409, detail="Pipeline is already running.")
 
-        # Resolve input file (prefer mapped data from UI)
-        input_file = req.input_file.strip() if req.input_file else ""
-        if not input_file:
-            mapped_path = os.path.join(UPLOAD_DIR, "input_mapped.json")
-            if os.path.isfile(mapped_path):
-                input_file = mapped_path
-            else:
-                for ext in [".json", ".csv", ".xlsx", ".xls"]:
-                    candidate = os.path.join(UPLOAD_DIR, f"input{ext}")
-                    if os.path.isfile(candidate):
-                        input_file = candidate
-                        break
-        if not input_file:
-            input_file = DEFAULT_INPUT_FILE
+        input_file = _resolve_pipeline_input_file(req.input_file)
 
         if not os.path.isfile(input_file):
             raise HTTPException(
@@ -550,15 +573,37 @@ def create_app() -> FastAPI:
         # Pass dynamic batch params (0 means auto)
         n_splits = req.n_splits if req.n_splits > 0 else None
         batch_size = req.batch_size if req.batch_size > 0 else None
+        max_faqs_kw = req.max_faqs if req.max_faqs > 0 else None
 
         thread = threading.Thread(
             target=_run_pipeline_thread,
             args=(input_file,),
-            kwargs={"n_splits": n_splits, "batch_size": batch_size},
+            kwargs={"n_splits": n_splits, "batch_size": batch_size, "max_faqs": max_faqs_kw},
             daemon=True,
         )
         thread.start()
-        return {"message": "Pipeline started.", "input_file": input_file, "n_splits": n_splits, "batch_size": batch_size}
+        return {
+            "message": "Pipeline started.",
+            "input_file": input_file,
+            "n_splits": n_splits,
+            "batch_size": batch_size,
+            "max_faqs": max_faqs_kw,
+        }
+
+    @app.get("/pipeline-input-info", tags=["Pipeline"])
+    async def pipeline_input_info():
+        """Row count for the file the pipeline would use (for UI batch/split coupling)."""
+        input_file = _resolve_pipeline_input_file("")
+        if not os.path.isfile(input_file):
+            return {"row_count": 0, "input_file": None}
+        try:
+            from backend.data_loader import load_support_data
+
+            df = load_support_data(input_file, validate=False)
+            return {"row_count": len(df), "input_file": input_file}
+        except Exception as exc:
+            logger.warning("pipeline_input_info failed: %s", exc)
+            return {"row_count": 0, "input_file": input_file}
 
     # ── Pipeline Status Endpoint ───────────────────────────────────────────────
 

@@ -14,6 +14,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.config import (
     EMOJI_PATTERN,
+    FIELD_ANSWER,
     FIELD_CLEAN_QUESTION,
     FIELD_QUESTION,
     MAX_QUESTION_LENGTH,
@@ -22,6 +23,7 @@ from backend.config import (
     LOG_DATE_FORMAT,
     LOG_LEVEL,
 )
+from backend.faq_quality import has_question_intent, is_ack_only_answer, is_noise_message
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 logger = logging.getLogger(__name__)
@@ -91,6 +93,24 @@ def _is_valid_question(clean_question: str) -> tuple[bool, str]:
     if not has_alpha:
         return False, "no_alphabetic_content"
 
+    # 7. Short lines without clear question intent are usually chit-chat
+    if len(text_stripped) < 18 and not has_question_intent(text_stripped):
+        return False, "no_question_intent_short"
+
+    return True, ""
+
+
+def _is_valid_answer_for_row(answer: str) -> tuple[bool, str]:
+    """Drop rows where the agent message cannot support a real FAQ answer."""
+    ans = str(answer or "").strip()
+    if not ans:
+        return False, "empty_answer"
+    if is_noise_message(ans):
+        return False, "noise_answer"
+    if is_ack_only_answer(ans):
+        return False, "ack_only_answer"
+    if len(ans) < 8:
+        return False, "answer_too_short"
     return True, ""
 
 
@@ -115,6 +135,10 @@ def filter_questions(df: pd.DataFrame) -> pd.DataFrame:
     for _, row in df.iterrows():
         clean_q = row.get(FIELD_CLEAN_QUESTION, row.get(FIELD_QUESTION, ""))
         valid, reason = _is_valid_question(str(clean_q))
+        if valid and FIELD_ANSWER in row:
+            ok_a, ra = _is_valid_answer_for_row(row.get(FIELD_ANSWER, ""))
+            if not ok_a:
+                valid, reason = False, ra
         valid_flags.append(valid)
         rejection_reasons.append(reason)
 
