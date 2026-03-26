@@ -533,14 +533,15 @@ def create_app() -> FastAPI:
             raise HTTPException(500, f"Failed to load uploaded data: {e}")
 
     @app.post("/save-uploaded-data", tags=["Data Manipulation"])
-    async def save_uploaded_data(req: SaveUploadedDataRequest):
+    async def save_uploaded_data(req: dict):
         """Save frontend manipulated data back into a format ready for the pipeline."""
         import pandas as pd
-        if not req.data:
+        data = req.get("data")
+        if not data:
             raise HTTPException(400, "No data provided to save.")
             
         try:
-            df = pd.DataFrame(req.data)
+            df = pd.DataFrame(data)
             # Define exact output
             mapped_path = os.path.join(UPLOAD_DIR, "input_mapped.json")
             out_records = df.to_dict(orient="records")

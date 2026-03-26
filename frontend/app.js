@@ -112,41 +112,54 @@ async function refreshPipelineInputInfo() {
 function updatePipelineParamLabels() {
   const sv = document.getElementById('splitsValue');
   const bv = document.getElementById('batchValue');
+  const maxv = document.getElementById('maxFaqsValue');
+
   const s = document.getElementById('splitsSlider');
   const b = document.getElementById('batchSlider');
-  if (sv && s) sv.textContent = s.value;
-  if (bv && b) bv.textContent = b.value;
+  const maxs = document.getElementById('maxFaqsSlider');
+
+  if (sv && s) sv.textContent = s.value === "0" ? "Auto" : s.value;
+  if (bv && b) bv.textContent = b.value === "0" ? "Auto" : b.value;
+  if (maxv && maxs) maxv.textContent = maxs.value === "0" ? "Auto" : maxs.value;
 }
 
 function onPipelineSplitsInput(val) {
-  const R = state.pipelineRowCount || 0;
-  const S = Math.max(1, Math.min(15, parseInt(val, 10) || 1));
-  const K = pipelineCouplingTarget(R);
-  let B = Math.round(K / Math.max(1, S));
-  B = Math.max(1, Math.min(20, B));
+  const S = parseInt(val, 10) || 0;
   const sEl = document.getElementById('splitsSlider');
   const bEl = document.getElementById('batchSlider');
+  const maxEl = document.getElementById('maxFaqsSlider');
+  
   if (sEl) sEl.value = String(S);
-  if (bEl) bEl.value = String(B);
+  if (bEl) bEl.value = "0";
+  if (maxEl) maxEl.value = "0";
+  
   updatePipelineParamLabels();
 }
 
 function onPipelineBatchInput(val) {
-  const R = state.pipelineRowCount || 0;
-  const B = Math.max(1, Math.min(20, parseInt(val, 10) || 1));
-  const K = pipelineCouplingTarget(R);
-  let S = Math.round(K / Math.max(1, B));
-  S = Math.max(1, Math.min(15, S));
+  const B = parseInt(val, 10) || 0;
   const sEl = document.getElementById('splitsSlider');
   const bEl = document.getElementById('batchSlider');
-  if (sEl) sEl.value = String(S);
+  const maxEl = document.getElementById('maxFaqsSlider');
+  
   if (bEl) bEl.value = String(B);
+  if (sEl) sEl.value = "0";
+  if (maxEl) maxEl.value = "0";
+  
   updatePipelineParamLabels();
 }
 
 function updateMaxFaqsLabel(v) {
-  const el = document.getElementById('maxFaqsValue');
-  if (el) el.textContent = v;
+  const S = parseInt(v, 10) || 0;
+  const sEl = document.getElementById('splitsSlider');
+  const bEl = document.getElementById('batchSlider');
+  const maxEl = document.getElementById('maxFaqsSlider');
+  
+  if (maxEl) maxEl.value = String(S);
+  if (sEl) sEl.value = "0";
+  if (bEl) bEl.value = "0";
+  
+  updatePipelineParamLabels();
 }
 
 async function preparePipelinePage() {
