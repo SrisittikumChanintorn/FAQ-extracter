@@ -441,15 +441,16 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/preview-data", tags=["Pipeline"])
-    async def preview_data(req: PreviewDataRequest):
+    async def preview_data(req: dict):
         """Read an uploaded file and return its columns + top 5 sample rows for UI mapping."""
-        if not os.path.isfile(req.file_path):
+        file_path = req.get("file_path", "")
+        if not os.path.isfile(file_path):
             raise HTTPException(404, "Uploaded file not found.")
 
         try:
             from backend.data_loader import load_support_data
             # Load raw dataframe (without strict validation)
-            df = load_support_data(req.file_path, validate=False)
+            df = load_support_data(file_path, validate=False)
             if df.empty:
                 raise ValueError("File is empty.")
                 
@@ -462,26 +463,28 @@ def create_app() -> FastAPI:
             raise HTTPException(400, f"Cannot read file: {e}")
 
     @app.post("/apply-mapping", tags=["Pipeline"])
-    async def apply_mapping(req: ApplyMappingRequest):
+    async def apply_mapping(req: dict):
         """Extract user-mapped columns, rename them, and overwrite as the parsed format."""
-        if not os.path.isfile(req.file_path):
+        file_path = req.get("file_path", "")
+        customer_col = req.get("customer_col", "")
+        admin_col = req.get("admin_col", "")
+        if not os.path.isfile(file_path):
             raise HTTPException(404, "Uploaded file not found.")
 
         try:
             from backend.data_loader import load_support_data
-            df = load_support_data(req.file_path, validate=False)
-            if req.customer_col not in df.columns or req.admin_col not in df.columns:
-                raise ValueError(f"Columns '{req.customer_col}' or '{req.admin_col}' missing from file.")
+            df = load_support_data(file_path, validate=False)
+            if customer_col not in df.columns or admin_col not in df.columns:
+                raise ValueError(f"Columns '{customer_col}' or '{admin_col}' missing from file.")
 
             # Map to required format
-            df_mapped = df[[req.customer_col, req.admin_col]].copy()
+            df_mapped = df[[customer_col, admin_col]].copy()
             df_mapped.rename(columns={
-                req.customer_col: "customer_message", 
-                req.admin_col: "admin_reply"
+                customer_col: "customer_message", 
+                admin_col: "admin_reply"
             }, inplace=True)
             
             # Save mapped data back out. We always save mapping results as JSON for safety.
-            ext = os.path.splitext(req.file_path)[1].lower()
             mapped_path = os.path.join(UPLOAD_DIR, "input_mapped.json")
             
             # Using records orient to be standard JSON
@@ -549,7 +552,7 @@ def create_app() -> FastAPI:
             with open(mapped_path, "w", encoding="utf-8") as f:
                 json.dump(out_records, f, ensure_ascii=False, indent=2)
                 
-            return {"message": "Data saved successfully", "row_count": len(req.data)}
+            return {"message": "Data saved successfully", "row_count": len(data)}
         except Exception as e:
             logger.error(f"Failed to save uploaded data: {e}")
             raise HTTPException(500, f"Failed to save data: {e}")
@@ -557,13 +560,18 @@ def create_app() -> FastAPI:
     # ── Pipeline Run Endpoint ──────────────────────────────────────────────────
 
     @app.post("/run-pipeline", tags=["Pipeline"])
-    async def run_pipeline_endpoint(req: RunPipelineRequest):
+    async def run_pipeline_endpoint(req: dict):
         """Trigger the FAQ mining pipeline in a background thread."""
         with _pipeline_lock:
             if _pipeline_state["status"] == "running":
                 raise HTTPException(status_code=409, detail="Pipeline is already running.")
 
-        input_file = _resolve_pipeline_input_file(req.input_file)
+        req_input_file = req.get("input_file", "")
+        req_n_splits = int(req.get("n_splits", 0))
+        req_batch_size = int(req.get("batch_size", 0))
+        req_max_faqs = int(req.get("max_faqs", 0))
+
+        input_file = _resolve_pipeline_input_file(req_input_file)
 
         if not os.path.isfile(input_file):
             raise HTTPException(
@@ -572,9 +580,9 @@ def create_app() -> FastAPI:
             )
 
         # Pass dynamic batch params (0 means auto)
-        n_splits = req.n_splits if req.n_splits > 0 else None
-        batch_size = req.batch_size if req.batch_size > 0 else None
-        max_faqs_kw = req.max_faqs if req.max_faqs > 0 else None
+        n_splits = req_n_splits if req_n_splits > 0 else None
+        batch_size = req_batch_size if req_batch_size > 0 else None
+        max_faqs_kw = req_max_faqs if req_max_faqs > 0 else None
 
         thread = threading.Thread(
             target=_run_pipeline_thread,
